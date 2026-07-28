@@ -48,6 +48,9 @@ export DATABASE_URL="${DATABASE_URL:-mysql://am32:am32password@127.0.0.1:3308/am
 export REDIS_HOST="${REDIS_HOST:-127.0.0.1}"
 export MYSQL_HOST="${MYSQL_HOST:-127.0.0.1}"
 export MYSQL_PORT="${MYSQL_PORT:-3308}"
+# Telemetry consent uses an interactive TTY prompt; that crashes under ./run.sh
+# (background job / no real TTY) with ERR_TTY_INIT_FAILED.
+export NUXT_TELEMETRY_DISABLED="${NUXT_TELEMETRY_DISABLED:-1}"
 
 need_install=0
 if [[ ! -d node_modules ]]; then
@@ -129,12 +132,19 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
+if command -v fuser >/dev/null 2>&1 && fuser "${PORT}/tcp" >/dev/null 2>&1; then
+  echo "Port ${PORT} is already in use. Stop the other process or run: ./run.sh --port 3001" >&2
+  fuser -v "${PORT}/tcp" 2>&1 || true
+  exit 1
+fi
+
 echo "==> prisma generate"
 yarn prisma:generate
 
 echo "==> Starting nuxt dev on port ${PORT}"
 echo "    DATABASE_URL=${DATABASE_URL}"
 echo "    REDIS_HOST=${REDIS_HOST}"
+echo "    NUXT_TELEMETRY_DISABLED=${NUXT_TELEMETRY_DISABLED}"
 export PORT
 export HOST="${HOST:-0.0.0.0}"
 # Call nuxt directly so --port is not swallowed by the package.json script chain

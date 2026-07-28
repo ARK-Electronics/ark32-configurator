@@ -1,0 +1,2 @@
+# Avoid interactive telemetry consent prompt (breaks non-TTY ./run.sh).
+telemetry=false

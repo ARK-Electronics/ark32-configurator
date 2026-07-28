@@ -605,17 +605,41 @@ const connectToDevice = async () => {
                 if (isDirectConnectDevice.value) {
                     connectToEsc();
                 } else {
-                    const result = await Msp.getInstance().sendWithPromise(MSP_COMMANDS.MSP_API_VERSION).catch(async (err) => {
-                        logError(`${err.message}, trying to exit fourway and try again.`);
+                    // ArduPilot only hands the USB/MAVLink port to MSP/BLHeli after
+                    // ~4s with no inbound MAVLink (GCS_MAVLink alternative protocol).
+                    // Close Mission Planner/QGC first; then wait here before MSP.
+                    log('Waiting 4.5s for ArduPilot MSP window (no MAVLink on this port)...');
+                    const waitUntil = Date.now() + 4500;
+                    while (Date.now() < waitUntil) {
+                        await Serial.drain(50, 100);
+                        await delay(200);
+                    }
+                    await Serial.drain();
+
+                    let result = null as Awaited<ReturnType<typeof Msp.prototype.sendWithPromise>> | null;
+                    for (let attempt = 1; attempt <= 5; attempt++) {
+                        try {
+                            result = await Msp.getInstance().sendWithPromise(MSP_COMMANDS.MSP_API_VERSION);
+                            break;
+                        } catch (err: any) {
+                            logError(`MSP_API_VERSION try ${attempt}/5: ${err.message}`);
+                            await Serial.drain();
+                            await delay(500);
+                        }
+                    }
+
+                    if (!result) {
+                        logError('trying to exit fourway and try again.');
                         serialStore.isFourWay = true;
-                        await FourWay.getInstance().sendWithPromise(FOUR_WAY_COMMANDS.cmd_InterfaceExit);
+                        await FourWay.getInstance().sendWithPromise(FOUR_WAY_COMMANDS.cmd_InterfaceExit).catch(() => null);
                         await delay(1000);
                         serialStore.isFourWay = false;
-                        return Msp.getInstance().sendWithPromise(MSP_COMMANDS.MSP_API_VERSION).catch(() => {
-                            logError('Not in four way mode? Cant automatically resolve issue! Restart and replug device and try again.');
+                        await Serial.drain();
+                        result = await Msp.getInstance().sendWithPromise(MSP_COMMANDS.MSP_API_VERSION).catch(() => {
+                            logError('Not in four way mode? Close all GCS apps, unplug/replug USB, wait 5s after Connect.');
                             return null;
                         });
-                    });
+                    }
 
                     if (result === null) {
                         await disconnectFromDevice();
@@ -648,6 +672,7 @@ const connectToDevice = async () => {
                     serialStore.isFourWay = true;
 
                     escStore.expectedCount = passthroughResult?.data.getUint8(0) ?? 0;
+                    log(`Passthrough ready, ESC count from FC: ${escStore.expectedCount}`);
                 }
 
                 serialStore.hasConnection = true;

@@ -1,4 +1,4 @@
-import { useMinio } from '~/composables/useMinio';
+import { isMinioConfigured, useMinio } from '~/composables/useMinio';
 
 const getVersion = (version: number) => {
     if (version > 3) {
@@ -8,6 +8,13 @@ const getVersion = (version: number) => {
 };
 
 export default defineEventHandler(async (event) => {
+    if (!isMinioConfigured()) {
+        throw createError({
+            statusCode: 503,
+            statusMessage: 'Firmware catalog not configured (MINIO_URL unset)'
+        });
+    }
+
     const version = Number(getQuery(event).version?.toString() ?? '2');
     const name = getRouterParam(event, 'name');
     const minioClient = useMinio();
@@ -35,3 +42,4 @@ export default defineEventHandler(async (event) => {
 
     return binariesCache.getItem(`binaries:${filePath}`);
 });
+

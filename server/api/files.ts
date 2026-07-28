@@ -1,5 +1,5 @@
 import { promiseTimeout } from '@vueuse/core';
-import { useMinio } from '~/composables/useMinio';
+import { isMinioConfigured, useMinio } from '~/composables/useMinio';
 
 type CachedObject = {
     key: string,

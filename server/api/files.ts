@@ -159,6 +159,11 @@ export default defineEventHandler(async (event) => {
     const includePrereleases = query.prereleases !== undefined;
     const filter = query.filter?.toString().split(',') ?? ['releases', 'kiss-ultra-releases', 'bootloader', 'tools', 'unlocker'];
 
+    // Local passthrough / flash-from-disk does not need object storage.
+    if (!isMinioConfigured()) {
+        return { data: [] as BlobFolder[] };
+    }
+
     const sectionConfigs: SectionConfig[] = [
         {
             filterName: 'releases',
@@ -203,29 +208,36 @@ export default defineEventHandler(async (event) => {
         }
     ];
 
-    const minioClient = useMinio();
-    const folders: BlobFolder[] = [];
+    try {
+        const minioClient = useMinio();
+        const folders: BlobFolder[] = [];
 
-    for (const section of sectionConfigs) {
-        if (!filter.includes(section.filterName)) {
-            continue;
+        for (const section of sectionConfigs) {
+            if (!filter.includes(section.filterName)) {
+                continue;
+            }
+
+            const cache = useStorage(section.storageName);
+            const entries = await getCachedObjects(minioClient, cache, section.bucketName, section.cacheNamespace);
+
+            folders.push(section.nested
+                ? buildNestedFolder(
+                    section.folderName,
+                    entries,
+                    section.bucketName,
+                    section.cacheNamespace,
+                    section.includePrereleaseFilter ? includePrereleases : true
+                )
+                : buildFlatFolder(section.folderName, entries, section.bucketName, section.cacheNamespace));
         }
 
-        const cache = useStorage(section.storageName);
-        const entries = await getCachedObjects(minioClient, cache, section.bucketName, section.cacheNamespace);
-
-        folders.push(section.nested
-            ? buildNestedFolder(
-                section.folderName,
-                entries,
-                section.bucketName,
-                section.cacheNamespace,
-                section.includePrereleaseFilter ? includePrereleases : true
-            )
-            : buildFlatFolder(section.folderName, entries, section.bucketName, section.cacheNamespace));
+        return {
+            data: folders
+        };
+    } catch (error) {
+        console.warn('[api/files] firmware catalog unavailable:',
+            error instanceof Error ? error.message : error);
+        return { data: [] as BlobFolder[] };
     }
-
-    return {
-        data: folders
-    };
 });
+

@@ -698,6 +698,9 @@ const connectToEsc = async () => {
         escStore.count = 0;
         escStore.isLoading = true;
 
+        // Brief settle after MSP_SET_PASSTHROUGH before hammering soft-serial.
+        await delay(500);
+
         for (let i = 0; i < escStore.expectedCount; ++i) {
             const newEscData = {
                 isLoading: true,
@@ -706,15 +709,23 @@ const connectToEsc = async () => {
             escData.value.push(newEscData);
 
             try {
-                const result = await FourWay.getInstance().getInfo(i);
+                // Use the same retry budget as post-flash re-read (was 2 by default).
+                const result = await FourWay.getInstance().getInfo(i, 10);
                 escStore.escData[i].data = result;
                 escStore.count += 1;
             } catch (e) {
                 console.error(e);
+                logError(`ESC #${i + 1} failed to enumerate`);
                 newEscData.isError = true;
             }
 
             newEscData.isLoading = false;
+
+            // Inter-ESC settle: avoids leftover soft-serial state / host RX
+            // contamination that disproportionately kills the last channel.
+            if (i < escStore.expectedCount - 1) {
+                await delay(300);
+            }
         }
 
         escStore.isLoading = false;

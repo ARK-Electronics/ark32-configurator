@@ -27,7 +27,7 @@ Usage: ./run.sh [--no-browser] [--port PORT]
   in a Chromium browser (required for Web Serial).
 
   Env:
-    PORT          Dev server port (default 3000)
+    PORT          Dev server port (default 3067)
     DATABASE_URL  Optional; dummy default is set for local passthrough
     REDIS_HOST    Optional; default 127.0.0.1
 EOF
@@ -133,7 +133,7 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 if command -v fuser >/dev/null 2>&1 && fuser "${PORT}/tcp" >/dev/null 2>&1; then
-  echo "Port ${PORT} is already in use. Stop the other process or run: ./run.sh --port 3001" >&2
+  echo "Port ${PORT} is already in use. Stop the other process or run: ./run.sh --port <other>" >&2
   fuser -v "${PORT}/tcp" 2>&1 || true
   exit 1
 fi

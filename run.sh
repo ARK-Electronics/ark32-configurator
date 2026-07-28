@@ -27,7 +27,9 @@ Usage: ./run.sh [--no-browser] [--port PORT]
   in a Chromium browser (required for Web Serial).
 
   Env:
-    PORT   Dev server port (default 3000)
+    PORT          Dev server port (default 3000)
+    DATABASE_URL  Optional; dummy default is set for local passthrough
+    REDIS_HOST    Optional; default 127.0.0.1
 EOF
       exit 0
       ;;
@@ -39,6 +41,13 @@ EOF
 done
 
 URL="http://localhost:${PORT}"
+
+# Prisma / Nuxt require these at config load even when DB/Redis are unused
+# (passthrough is browser Web Serial; admin APIs need a real DB).
+export DATABASE_URL="${DATABASE_URL:-mysql://am32:am32password@127.0.0.1:3308/am32}"
+export REDIS_HOST="${REDIS_HOST:-127.0.0.1}"
+export MYSQL_HOST="${MYSQL_HOST:-127.0.0.1}"
+export MYSQL_PORT="${MYSQL_PORT:-3308}"
 
 need_install=0
 if [[ ! -d node_modules ]]; then
@@ -87,9 +96,14 @@ open_browser() {
 
 wait_for_server() {
   local url="$1"
-  local tries=60
+  local pid="${2:-}"
+  local tries=120
   local i
   for ((i = 1; i <= tries; i++)); do
+    if [[ -n "$pid" ]] && ! kill -0 "$pid" 2>/dev/null; then
+      echo "Dev server exited early (pid ${pid})." >&2
+      return 1
+    fi
     if command -v curl >/dev/null 2>&1; then
       if curl -fsS -o /dev/null --connect-timeout 1 "$url" 2>/dev/null; then
         return 0
@@ -115,18 +129,26 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-echo "==> Starting yarn dev on port ${PORT}"
-# Nuxt respects PORT; also pass host for LAN access if needed
+echo "==> prisma generate"
+yarn prisma:generate
+
+echo "==> Starting nuxt dev on port ${PORT}"
+echo "    DATABASE_URL=${DATABASE_URL}"
+echo "    REDIS_HOST=${REDIS_HOST}"
 export PORT
 export HOST="${HOST:-0.0.0.0}"
-yarn dev --port "$PORT" &
+# Call nuxt directly so --port is not swallowed by the package.json script chain
+yarn nuxt dev --port "$PORT" --host "$HOST" &
 DEV_PID=$!
 
 if [[ "$OPEN_BROWSER" -eq 1 ]]; then
-  if wait_for_server "$URL"; then
+  if wait_for_server "$URL" "$DEV_PID"; then
     open_browser "$URL" || true
   else
     echo "Server did not become ready in time; open ${URL} manually once yarn is up." >&2
+    if ! kill -0 "$DEV_PID" 2>/dev/null; then
+      exit 1
+    fi
   fi
 else
   echo "==> Browser launch skipped (--no-browser). URL: ${URL}"

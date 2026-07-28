@@ -24,6 +24,14 @@ export default defineNuxtConfig({
 
     ssr: false,
 
+    // Fail if the requested port is taken (avoids silent move to 3001 and a
+    // confused ./run.sh health check).
+    vite: {
+        server: {
+            strictPort: true
+        }
+    },
+
     runtimeConfig: {
         redis: { // Default values
             host: '',

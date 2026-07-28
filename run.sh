@@ -6,7 +6,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT"
 
-PORT="${PORT:-3000}"
+PORT="${PORT:-3067}"
 OPEN_BROWSER=1
 
 while [[ $# -gt 0 ]]; do

@@ -11,7 +11,7 @@ git checkout ark-release
 ./run.sh
 ```
 
-That installs deps if needed, starts the dev server, and opens Chromium at http://localhost:3000.
+That installs deps if needed, starts the dev server, and opens Chromium at http://localhost:3067.
 
 ## What is different from upstream AM32 configurator
 

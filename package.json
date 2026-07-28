@@ -1,6 +1,6 @@
 {
-  "version": "1.0.0",
-  "name": "am32-configurator",
+  "version": "1.0.1",
+  "name": "ark32-configurator",
   "type": "module",
   "engines": {
     "node": "22.x"

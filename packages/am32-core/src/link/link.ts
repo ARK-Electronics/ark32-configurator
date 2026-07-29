@@ -290,8 +290,9 @@ export class Link {
         try {
             await this.transport.write(frame);
         } catch (error) {
-            // Do not leave `settled` unhandled: a late reply would resolve a
-            // promise nobody awaits, which surfaces as an unhandled rejection.
+            // If the timeout already fired while the write was pending, `settled`
+            // is rejected and nothing is going to await it. Attach a handler so
+            // that does not surface as an unhandled rejection.
             settled.catch(() => {});
             throw new LinkError('write', `${label}: write failed: ${describe(error)}`, 1, { cause: error });
         }

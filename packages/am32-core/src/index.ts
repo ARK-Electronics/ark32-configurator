@@ -101,3 +101,44 @@ export {
     wireMs
 } from './link/timeout-policy';
 export type { FcVariant, TimeoutPolicyOptions } from './link/timeout-policy';
+
+export { SessionError, causedBySessionError, describeError } from './errors';
+export type { SessionErrorReason } from './errors';
+
+export { SessionEmitter } from './events';
+export type {
+    EscEvent,
+    LogEvent,
+    LogLevel,
+    ProgressEvent,
+    SessionEventName,
+    SessionEvents,
+    SessionListener,
+    SessionState,
+    StateEvent
+} from './events';
+
+export { decodeBytes, decodeBytesZ } from './text';
+
+export {
+    ARDUPILOT_QUIRKS,
+    BETAFLIGHT_QUIRKS,
+    GENERIC_QUIRKS,
+    quirksForFcVariantId,
+    quirksForVariant
+} from './fc/quirks';
+export type { FcQuirks, MspInPassthrough } from './fc/quirks';
+
+export { MspSession } from './fc/msp-session';
+export type { FcApiVersion, FcBattery, FcInfo, MspSessionOptions } from './fc/msp-session';
+
+export {
+    FOUR_WAY_DEFAULT_RETRIES,
+    FOUR_WAY_INIT_RETRIES,
+    FourWaySession
+} from './esc/fourway-session';
+export type { FourWayCommandOptions, FourWaySessionOptions } from './esc/fourway-session';
+
+/** The one public API. Everything above is what it is built out of. */
+export { Am32Session } from './session';
+export type { Am32SessionOptions, EscResult } from './session';

@@ -11,7 +11,7 @@
 </template>
 <script setup>
 import { FourWay } from './src/communication/four_way';
-import Msp from './src/communication/msp';
+import { Msp } from './src/communication/msp';
 const { $pwa } = useNuxtApp();
 
 const toast = useToast();

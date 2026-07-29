@@ -368,12 +368,12 @@
 
 import commandsQueue from '~/src/communication/commands.queue';
 import { FOUR_WAY_COMMANDS, FourWay } from '~/src/communication/four_way';
-import Msp, { MSP_COMMANDS } from '~/src/communication/msp';
+import { MSP_COMMANDS, Msp } from '~/src/communication/msp';
 import Serial from '~/src/communication/serial';
 import db from '~/src/db';
 import { decodeSettings } from 'am32-core/eeprom/codec';
 import { parseHex } from 'am32-core/hex';
-import Mcu, { type EscData } from 'am32-core/mcu';
+import { Mcu, type EscData } from 'am32-core/mcu';
 
 const toast = useToast();
 const serialStore = useSerialStore();

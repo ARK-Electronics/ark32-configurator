@@ -9,7 +9,7 @@ import {
     type FourWayResponse
 } from 'am32-core/framing/fourway';
 import { fillImage, parseHex } from 'am32-core/hex';
-import Mcu, { createMcuInfo, type McuInfo } from 'am32-core/mcu';
+import { Mcu, createMcuInfo, type McuInfo } from 'am32-core/mcu';
 import CommandQueue from '~/src/communication/commands.queue';
 import Serial from '~/src/communication/serial';
 

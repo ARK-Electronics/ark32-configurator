@@ -96,4 +96,3 @@ export class Msp {
 }
 
 export { MSP_COMMANDS };
-export default Msp;

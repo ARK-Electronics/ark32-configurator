@@ -191,5 +191,3 @@ export class Mcu {
         throw new Error('MCU does not have firmware start address');
     }
 }
-
-export default Mcu;

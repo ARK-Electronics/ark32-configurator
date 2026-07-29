@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import fc from 'fast-check';
+import { assert as fcAssert, integer, property, uint8Array } from 'fast-check';
 import type { EepromLayoutField } from './layout';
 import { EEPROM_SIZE, EepromLayout } from './layout';
 import { decodeSettings, encodeSettings, patchSettings } from './codec';
@@ -24,9 +24,9 @@ const image = (fill: number | ((i: number) => number) = 0) =>
 
 describe('eeprom codec round-trip', () => {
     it('decode -> encode is byte-identical for any 192-byte image', () => {
-        fc.assert(
-            fc.property(
-                fc.uint8Array({ minLength: EEPROM_SIZE, maxLength: EEPROM_SIZE }),
+        fcAssert(
+            property(
+                uint8Array({ minLength: EEPROM_SIZE, maxLength: EEPROM_SIZE }),
                 (bytes) => {
                     const layoutRevision = bytes[1] as number;
                     const settings = decodeSettings(bytes, layoutRevision);
@@ -39,10 +39,10 @@ describe('eeprom codec round-trip', () => {
     });
 
     it('decode -> encode is byte-identical at every layout revision', () => {
-        fc.assert(
-            fc.property(
-                fc.uint8Array({ minLength: EEPROM_SIZE, maxLength: EEPROM_SIZE }),
-                fc.integer({ min: 0, max: 5 }),
+        fcAssert(
+            property(
+                uint8Array({ minLength: EEPROM_SIZE, maxLength: EEPROM_SIZE }),
+                integer({ min: 0, max: 5 }),
                 (bytes, layoutRevision) => {
                     const settings = decodeSettings(bytes, layoutRevision);
                     const encoded = encodeSettings(bytes, settings, layoutRevision);
@@ -57,11 +57,11 @@ describe('eeprom codec round-trip', () => {
         const singleByteFields = Object.entries(EepromLayout as EepromLayoutField)
             .filter(([, f]) => f.size === 1 && f.minEepromVersion === undefined);
 
-        fc.assert(
-            fc.property(
-                fc.uint8Array({ minLength: EEPROM_SIZE, maxLength: EEPROM_SIZE }),
-                fc.integer({ min: 0, max: singleByteFields.length - 1 }),
-                fc.integer({ min: 0, max: 255 }),
+        fcAssert(
+            property(
+                uint8Array({ minLength: EEPROM_SIZE, maxLength: EEPROM_SIZE }),
+                integer({ min: 0, max: singleByteFields.length - 1 }),
+                integer({ min: 0, max: 255 }),
                 (bytes, fieldIndex, value) => {
                     const [name, field] = singleByteFields[fieldIndex] as [string, { offset: number }];
                     const encoded = patchSettings(bytes, { [name]: value }, 3);
@@ -79,10 +79,10 @@ describe('eeprom codec round-trip', () => {
     });
 
     it('preserves reserved bytes 13-16 and the CAN block 176-191 across a write', () => {
-        fc.assert(
-            fc.property(
-                fc.uint8Array({ minLength: EEPROM_SIZE, maxLength: EEPROM_SIZE }),
-                fc.integer({ min: 0, max: 255 }),
+        fcAssert(
+            property(
+                uint8Array({ minLength: EEPROM_SIZE, maxLength: EEPROM_SIZE }),
+                integer({ min: 0, max: 255 }),
                 (bytes, timingAdvance) => {
                     const encoded = patchSettings(bytes, { TIMING_ADVANCE: timingAdvance }, 3);
 

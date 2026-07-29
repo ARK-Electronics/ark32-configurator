@@ -1,7 +1,8 @@
 {
     "plan": "https://github.com/ARK-Electronics/ark32-configurator/issues/3",
     "auditBaseCommit": "4094dad",
-    "rule": "One block per session. Do not start the next block.",
+    "rule": "One block per session, fresh context each time. Driven by scripts/overhaul-loop.sh, which owns this file -- block agents must not edit it.",
+    "handoffNotes": "docs/plans/overhaul/notes/block-<id>.md, written by each block for the next one",
     "blocks": [
         {
             "id": "0",
@@ -14,74 +15,92 @@
         {
             "id": "0.5",
             "title": "Verification harness",
-            "status": "in-review",
+            "status": "done",
             "doneWhen": "yarn verify exits 0; CI runs it on push and PR",
-            "landedIn": "PR #5 (chore/verification-harness) -- merge before starting block 1a",
-            "notes": "vitest + fast-check, packages/am32-core skeleton with DOM/Node-free tsconfig, lint baseline to 0 errors, CLAUDE.md, this file, /block skill."
+            "landedIn": "PR #5 (chore/verification-harness)",
+            "notes": "vitest + fast-check, packages/am32-core skeleton with DOM/Node-free tsconfig, lint baseline to 0 errors, CLAUDE.md, this file, /block skill, the assert-* gates and the driver loop."
         },
         {
             "id": "1a",
             "title": "Delete removed features",
             "status": "todo",
-            "doneWhen": "yarn verify && scripts/assert-deleted.sh",
-            "notes": "Bootloader flashing (.amj tab, AmjType), USB-direct mode (src/communication/direct.ts and its guards), bootloader downloads. Mechanical, no protocol work."
+            "dependsOn": ["0.5"],
+            "doneWhenCmd": "./scripts/assert-deleted.sh",
+            "doneWhen": "yarn verify && ./scripts/assert-deleted.sh",
+            "notes": "Bootloader flashing (.amj tab, AmjType), USB-direct mode (src/communication/direct.ts and its guards), bootloader downloads. Mechanical, no protocol work. Bootloader info display in EscView stays."
         },
         {
             "id": "1b",
             "title": "Protocol core extraction",
             "status": "todo",
-            "doneWhen": "yarn verify",
-            "notes": "packages/am32-core: eeprom layout + byte-preserving codec (EEPROM_SIZE 192, CAN_SETTINGS as Uint8Array), MSP v1/v2 framing with error frames and echo check, 4-way framing, Mcu, hex. Fixes audit A (codec half) and D."
+            "dependsOn": ["1a"],
+            "doneWhenCmd": "test -f packages/am32-core/src/eeprom/codec.prop.test.ts && test -f packages/am32-core/src/framing/msp.test.ts && test -f packages/am32-core/src/framing/fourway.test.ts && ! grep -q '@am32/serial-msp' package.json",
+            "doneWhen": "yarn verify with the eeprom round-trip property test, MSP v1/v2/error/echo golden vectors and 4-way framing vectors all green",
+            "notes": "EEPROM_SIZE 192, CAN_SETTINGS as Uint8Array, encode from the read-back buffer. Reimplement MSP framing from the firmware sources -- do NOT port @am32/serial-msp's compiled dist. Fixes audit A (codec half) and D."
         },
         {
             "id": "2",
             "title": "Link and transports",
             "status": "todo",
-            "doneWhen": "yarn verify",
+            "dependsOn": ["1b"],
+            "doneWhenCmd": "test -f packages/am32-core/src/link/link.test.ts && ./scripts/assert-core-hygiene.sh",
+            "doneWhen": "yarn verify, plus a test proving two concurrent request() calls serialise, plus assert-core-hygiene",
             "notes": "Transport, Link, injectable Clock, drain semantics, retry, TimeoutPolicy. packages/am32-web replaces webserial-wrapper. Fixes E, G (hang + double drain), C."
         },
         {
             "id": "3",
             "title": "Simulated FC and ESCs",
             "status": "todo",
-            "doneWhen": "yarn verify",
-            "notes": "packages/am32-sim: SimEsc, SimFc (ArduPilot + Betaflight profiles), SimTransport, every fault knob, virtual clock."
+            "dependsOn": ["2"],
+            "doneWhenCmd": "./scripts/assert-fault-coverage.sh",
+            "doneWhen": "yarn verify, plus every fault knob implemented and referenced by a test",
+            "notes": "packages/am32-sim: SimEsc, SimFc (ArduPilot + Betaflight profiles), SimTransport, the fault knobs, virtual clock. Fidelity comes from the firmware sources -- read them with subagents."
         },
         {
             "id": "4",
             "title": "Session API",
             "status": "todo",
-            "doneWhen": "yarn verify",
-            "notes": "Am32Session + FC quirk modules. ArduPilot probe-then-wait, Betaflight fast path. Fixes B and H. Hardware checkpoint after this block."
+            "dependsOn": ["3"],
+            "doneWhenCmd": "test -f packages/am32-core/src/session.ts && ls packages/am32-core/src/**/session*.test.ts packages/am32-sim/src/**/*session*.test.ts >/dev/null 2>&1",
+            "doneWhen": "yarn verify, plus simulated 4-ESC ArduPilot enumerate, partial-failure enumerate that does not throw, and a Betaflight connect that skips the 4 s wait",
+            "hardwareCheckpoint": "outstanding -- enumerate on a real ARK FPV and a Betaflight board. Cannot run unattended; record it, do not block on it.",
+            "notes": "Am32Session + FC quirk modules. Fixes B and H."
         },
         {
             "id": "5",
             "title": "UI as a thin client",
             "status": "todo",
-            "doneWhen": "yarn verify",
-            "notes": "SerialDevice.vue shrinks to UI + store mirroring. Deletes src/communication/*, commands.queue.ts, dead store fields (I), the queue dependency. no-restricted-imports rule active."
+            "dependsOn": ["4"],
+            "doneWhenCmd": "grep -q 'no-restricted-imports' .eslintrc.json && ./scripts/assert-deleted.sh",
+            "doneWhen": "yarn verify with the no-restricted-imports rule active, plus assert-deleted",
+            "notes": "SerialDevice.vue shrinks to UI + store mirroring. Deletes src/communication/*, commands.queue.ts, the queue dependency, dead store fields (I). Flash failures surface as a toast and release the modal."
         },
         {
             "id": "6",
             "title": "Verified settings write and flash",
             "status": "todo",
-            "doneWhen": "yarn verify",
-            "notes": "writeSettings with read-back verification, flash() with page handling, applyDefaults. Completes A and C. Drops the bootloader-version auto-write in getInfo. Hardware checkpoint after this block."
+            "dependsOn": ["5"],
+            "doneWhenCmd": "./scripts/assert-core-hygiene.sh && ./scripts/assert-fault-coverage.sh",
+            "doneWhen": "yarn verify, plus a test proving a settings write leaves bytes 13-16 and 176-183 unchanged, and a flash with esc[n].slowBy(600) still succeeding",
+            "hardwareCheckpoint": "outstanding -- settings round-trip across a power cycle with the CAN block intact, plus a local .hex flash.",
+            "notes": "writeSettings with read-back verification, flash() with page handling, applyDefaults. Completes A and C. Drops the bootloader-version auto-write in getInfo."
         },
         {
             "id": "7",
             "title": "Headless CLI",
             "status": "todo",
-            "doneWhen": "yarn verify && CLI smoke against --sim",
+            "dependsOn": ["6"],
+            "doneWhenCmd": "test -d packages/am32-cli && test -d packages/am32-node",
+            "doneWhen": "yarn verify, plus `ark32 --sim enumerate --escs 4` and `ark32 --sim write --esc all -i fixture.bin` succeeding with no hardware",
             "notes": "packages/am32-node + packages/am32-cli including --sim. Packaging per issue #3 section 6."
         },
         {
             "id": "8",
             "title": "ARK32 firmware catalog",
-            "status": "blocked",
+            "status": "todo",
             "blockedBy": "ARK-Electronics/ARK32#67",
             "doneWhen": "A deploy with no MinIO shows the ARK32 release list and flashing from the catalog works end to end",
-            "notes": "Out of the sequential path. Do not attempt until ARK32#67 lands; there are no releases or tags to fetch."
+            "notes": "Out of the sequential path and never auto-run: there are no releases or tags to fetch until ARK32#67 lands."
         }
     ]
 }

@@ -71,7 +71,7 @@
         {
             "id": "4",
             "title": "Session API",
-            "status": "todo",
+            "status": "stuck",
             "dependsOn": [
                 "3"
             ],

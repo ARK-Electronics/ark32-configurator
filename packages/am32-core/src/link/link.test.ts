@@ -21,6 +21,8 @@ class FakeTransport implements Transport {
     isOpen = false;
     readonly writes: Uint8Array[] = [];
     writeError: Error | null = null;
+    /** When set, `write` returns this instead of resolving -- a stalled write. */
+    writeGate: Promise<void> | null = null;
     /** Called after each accepted write, so a test can reply inline. */
     onWrite: ((frame: Uint8Array, index: number) => void) | null = null;
 
@@ -41,6 +43,9 @@ class FakeTransport implements Transport {
             return Promise.reject(this.writeError);
         }
         this.writes.push(data.slice());
+        if (this.writeGate) {
+            return this.writeGate;
+        }
         this.onWrite?.(data, this.writes.length - 1);
         return Promise.resolve();
     }
@@ -208,6 +213,28 @@ describe('Link: every path settles (audit G)', () => {
         expect(outcome.ok === false && (outcome.error as LinkError).attempts).toBe(3);
         expect(transport.writes).toHaveLength(3);
         expect(link.stats.timeouts).toBe(3);
+    });
+
+    it('does not leak an unhandled rejection when a slow write fails after the timeout', async () => {
+        const { transport, clock, link } = await makeLink();
+
+        // The nastiest ordering: the budget runs out while the write is still
+        // pending, and only then does the write fail. Vitest fails the run on an
+        // unhandled rejection, so this pins that the already-rejected timeout
+        // promise gets a handler even though the caller sees the write error.
+        let failWrite!: (error: Error) => void;
+        transport.writeGate = new Promise<void>((_resolve, reject) => {
+            failWrite = reject;
+        });
+
+        const result = settle(link.request(readRequest(4), { ...baseOptions, timeout: 100, retries: 1 }));
+        await clock.advance(100);
+        failWrite(new Error('device disconnected mid-write'));
+        await clock.advance(0);
+
+        const outcome = await result;
+        expect(outcome.ok).toBe(false);
+        expect(outcome.ok === false && (outcome.error as LinkError).reason).toBe('write');
     });
 
     it('rejects a request on a closed transport without writing', async () => {

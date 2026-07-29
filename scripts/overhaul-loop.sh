@@ -187,7 +187,9 @@ while :; do
         id="$ONLY"
         python3 scripts/overhaul_status.py runnable "$id" >/dev/null || die "block $ONLY is not runnable (already done, or blocked)"
     else
-        id=$(python3 scripts/overhaul_status.py next)
+        # --dry-run never marks anything done, so `next` would keep returning the
+        # same block forever. Skip past the ones already shown this run.
+        id=$(DRY_SKIP="${DRY_SEEN:-}" python3 scripts/overhaul_status.py next)
     fi
 
     if [ -z "$id" ]; then
@@ -206,7 +208,7 @@ while :; do
         echo "--- prompt ------------------------------------------------------"
         build_prompt "$id" 1 /dev/null
         echo "-----------------------------------------------------------------"
-        python3 scripts/overhaul_status.py mark "$id" done --dry >/dev/null
+        DRY_SEEN="${DRY_SEEN:+$DRY_SEEN,}$id"
         [ -n "$ONLY" ] && break
         continue
     fi

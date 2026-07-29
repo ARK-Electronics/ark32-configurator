@@ -31,11 +31,18 @@ def find(data, block_id):
 
 
 def cmd_next(_args):
-    """First runnable block, honouring blockedBy."""
+    """First runnable block, honouring blockedBy.
+
+    DRY_SKIP is a comma-separated list of ids to pretend are already done. The
+    driver sets it during --dry-run, where nothing is ever marked done and this
+    would otherwise return the same block forever.
+    """
+    import os
+    skip = {s for s in os.environ.get("DRY_SKIP", "").split(",") if s}
     data = load()
-    done = {b["id"] for b in data["blocks"] if b.get("status") in TERMINAL}
+    done = {b["id"] for b in data["blocks"] if b.get("status") in TERMINAL} | skip
     for b in data["blocks"]:
-        if b.get("status") not in RUNNABLE:
+        if b.get("status") not in RUNNABLE or b["id"] in skip:
             continue
         if b.get("blockedBy"):
             continue  # external blocker, never auto-run

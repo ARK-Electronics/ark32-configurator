@@ -141,4 +141,4 @@ export type { FourWayCommandOptions, FourWaySessionOptions } from './esc/fourway
 
 /** The one public API. Everything above is what it is built out of. */
 export { Am32Session } from './session';
-export type { Am32SessionOptions, EscResult } from './session';
+export type { Am32SessionOptions, EscResult, FlashOptions, WriteSettingsResult } from './session';

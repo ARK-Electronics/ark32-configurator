@@ -219,6 +219,34 @@ export class FourWaySession {
         return response.params;
     }
 
+    /**
+     * `cmd_DeviceWrite` -- program `data` at `address`.
+     *
+     * There is no length check to make here: unlike a read, a write's reply
+     * carries no payload worth counting, and both firmwares report a refused
+     * program with a non-OK ACK, which the ACK check already catches.
+     *
+     * Three rules the *bootloader* imposes on the caller, all confirmed against
+     * `AM32-bootloader/Mcu/f051/Src/eeprom.c:20-22,34-44,62`:
+     *
+     *  - `address` and `data.length` must both be even.
+     *  - The page is erased **only** when `address` is page-aligned, so pages must
+     *    be streamed in ascending order and each page's first write must land on
+     *    its boundary. A write into a page that was never erased can only clear
+     *    bits, so the bootloader's own `memcmp` verify fails and it answers an
+     *    error -- exactly like real flash.
+     *  - A write to the EEPROM base has payload byte 2 replaced by the
+     *    bootloader's own version (`main.c:517-524`), so `BOOT_LOADER_REVISION`
+     *    never round-trips.
+     */
+    async write (address: number, data: ArrayLike<number>): Promise<void> {
+        await this.command(FOUR_WAY_COMMANDS.cmd_DeviceWrite, {
+            params: data,
+            address,
+            payloadBytes: data.length
+        });
+    }
+
     /** `cmd_DeviceReset` -- run the application again on `target`. */
     async reset (target: number): Promise<void> {
         await this.command(FOUR_WAY_COMMANDS.cmd_DeviceReset, { params: [target] });

@@ -40,7 +40,14 @@ export interface LogEvent {
  * (an enumerate before the FC has said how many channels there are).
  */
 export interface ProgressEvent {
-    phase: 'connect' | 'passthrough' | 'enumerate' | 'read' | 'reset'
+    /**
+     * Which step of a session operation this tick belongs to.
+     *
+     * `flash` counts **bytes**, so a client can draw a real progress bar; every
+     * other phase counts steps and is there so a client can name what is
+     * happening. The app maps them to the labels its flash modal shows.
+     */
+    phase: 'connect' | 'passthrough' | 'enumerate' | 'read' | 'reset' | 'write' | 'flash'
     current: number
     total: number
     /** Zero-based channel, when the phase is per-ESC. */

@@ -28,14 +28,19 @@
  *  - **No timeout is a parameter.** They all come from `TimeoutPolicy`, which
  *    adopts the FC's own budgets once `connect()` has identified it.
  *
- * Not here yet, deliberately: `writeSettings`, `applyDefaults` and `flash` are
- * block 6, which owns read-back verification and page handling. They are absent
- * rather than stubbed -- a method that exists and does not verify is how audit
- * item **A** survived this long.
+ * `writeSettings` and `flash` arrived in block 5 rather than block 4 for a
+ * structural reason worth recording: block 5 deletes the app's `src/communication`
+ * stack, and it has no choice -- a `SerialPort` can be opened once, and two
+ * `Link`s over one transport would each have their own mutex, so the legacy stack
+ * and this session cannot share a port. The app's Save and Flash buttons
+ * therefore have nowhere else to call. What they are is a behaviour-preserving
+ * move of the code the app already ran. **Block 6 still owns read-back
+ * verification** (which must exempt EEPROM byte 2, the one the bootloader stamps
+ * with its own version) **and `applyDefaults`.**
  */
 
 import { VirtualClock, createSystemClock, type Clock } from './clock';
-import { decodeSettings } from './eeprom/codec';
+import { decodeSettings, encodeSettings } from './eeprom/codec';
 import { EEPROM_SIZE, EepromLayout, type EscSettings } from './eeprom/layout';
 import { SessionError, causedBySessionError, describeError } from './errors';
 import {
@@ -47,6 +52,7 @@ import {
 } from './events';
 import { FourWaySession } from './esc/fourway-session';
 import { MspSession, type FcInfo } from './fc/msp-session';
+import { fillImage, parseHex, type HexData } from './hex';
 import { Link, type LinkOptions } from './link/link';
 import { DEFAULT_TIMEOUT_POLICY, TimeoutPolicy } from './link/timeout-policy';
 import { Mcu, createMcuInfo, type McuInfo } from './mcu';
@@ -84,6 +90,46 @@ export interface EscResult {
     ok: boolean;
     info?: McuInfo;
     error?: string;
+}
+
+/**
+ * What {@link Am32Session.writeSettings} did.
+ *
+ * The plan's API sketch has it returning `EscSettings`; it returns this instead
+ * because the caller needs two more things the settings object cannot carry. The
+ * app mirrors `image` into its `settingsBuffer` -- the buffer a *later* write
+ * starts from, and what `EscView` reads the boot byte out of -- and `changed`
+ * distinguishes "written" from "there was nothing to write", which is a log line
+ * the app has always produced.
+ */
+export interface WriteSettingsResult {
+    /** Zero-based channel. */
+    target: number;
+    /**
+     * False when the patch encoded to the same 192 bytes the ESC already had, in
+     * which case nothing was put on the wire.
+     */
+    changed: boolean;
+    /** The settings as they now stand, decoded from the image below. */
+    settings: EscSettings;
+    /**
+     * The 192 bytes written.
+     *
+     * Careful: this is what the host *sent*. A write to the EEPROM base has byte
+     * 2 replaced by the bootloader's own version (AM32-bootloader
+     * `main.c:517-524`), so the ESC's byte 2 may differ. Any read-back
+     * verification block 6 adds has to exempt it.
+     */
+    image: Uint8Array;
+}
+
+export interface FlashOptions {
+    /**
+     * Write the image even though its embedded firmware name does not match the
+     * ESC's. The app's "Ignore current mcu layout" checkbox, and block 7's
+     * `--allow-mcu-mismatch`.
+     */
+    allowMcuMismatch?: boolean;
 }
 
 export interface Am32SessionOptions {
@@ -148,6 +194,28 @@ const FIRMWARE_NAME_BYTES = 32;
  * would silently break the firmware-catalog lookup, whose key is this string.
  */
 const FIRMWARE_NAME_PATTERN = /[A-Z0-9_]+/;
+
+/**
+ * Bytes per `cmd_DeviceWrite` while streaming a firmware image.
+ *
+ * 256 is the 4-way parameter maximum and what the app has always used. Each
+ * chunk is even-length and 256-aligned, which is what the bootloader's
+ * halfword programming and its erase-on-page-aligned-write rule require.
+ */
+const FLASH_CHUNK_BYTES = 0x100;
+
+/** Byte-for-byte comparison. `compare()` from the app, which the core cannot import. */
+function bytesEqual (a: Uint8Array, b: Uint8Array): boolean {
+    if (a.length !== b.length) {
+        return false;
+    }
+    for (let i = 0; i < a.length; i += 1) {
+        if (a[i] !== b[i]) {
+            return false;
+        }
+    }
+    return true;
+}
 
 export class Am32Session {
     private readonly transport: Transport;
@@ -453,21 +521,18 @@ export class Am32Session {
      * meant. A read failure surfaced as a bare
      * `cmd_DeviceRead failed: no complete response within 500ms`.
      */
-    private async readEscImpl (target: number): Promise<McuInfo> {
+    private readEscImpl (target: number): Promise<McuInfo> {
         this.requirePassthrough();
-        try {
-            return await this.readEscUnlabelled(target);
-        } catch (error) {
-            const inner = causedBySessionError(error);
-            throw new SessionError(
-                inner?.reason ?? 'esc-command',
-                `ESC #${target + 1}: ${describeError(error)}`,
-                { cause: error, target, ack: inner?.ack }
-            );
-        }
+        return this.labelled(target, () => this.readEscUnlabelled(target));
     }
 
-    private async readEscUnlabelled (target: number): Promise<McuInfo> {
+    /**
+     * `cmd_DeviceInitFlash` plus the MCU variant it implies.
+     *
+     * Every per-channel operation starts here, because 4-way is stateful: a read
+     * or a write acts on whichever channel the last init-flash selected.
+     */
+    private async selectTarget (target: number): Promise<{ info: McuInfo, mcu: Mcu }> {
         const flash = await this.fourWay.initFlash(target).catch((error: unknown) => {
             throw new SessionError('esc-init', 'did not enter its bootloader', { cause: error, target });
         });
@@ -477,9 +542,8 @@ export class Am32Session {
         // The signature decides the EEPROM offset, the page size and the flash
         // layout, so an unrecognised one is not something to carry forward: it
         // would send the very next read to an address invented out of a default.
-        let mcu: Mcu;
         try {
-            mcu = new Mcu(info.meta.signature);
+            return { info, mcu: new Mcu(info.meta.signature) };
         } catch (error) {
             throw new SessionError(
                 'esc-init',
@@ -487,6 +551,10 @@ export class Am32Session {
                 { cause: error, target }
             );
         }
+    }
+
+    private async readEscUnlabelled (target: number): Promise<McuInfo> {
+        const { info, mcu } = await this.selectTarget(target);
         const eepromOffset = mcu.getEepromOffset();
 
         const nameBytes = await this.fourWay.readAddress(eepromOffset - FIRMWARE_NAME_BYTES, FIRMWARE_NAME_BYTES);
@@ -525,6 +593,248 @@ export class Am32Session {
     /** The decoded settings for one channel. See {@link readEsc} for the image. */
     readSettings (target: number): Promise<EscSettings> {
         return this.exclusive(() => this.readEscImpl(target).then(info => info.settings));
+    }
+
+    /**
+     * Apply `patch` to one channel's settings, preserving every byte it does not
+     * name.
+     *
+     * The outgoing image is built from a **fresh read of the ESC**, not from
+     * whatever the caller last saw, and only the layout's named, version-applicable
+     * fields are overwritten. That is what keeps the firmware's
+     * `reserved_eeprom_3[4]` at 13-16, the live CAN fields at 176-183 and
+     * `can.reserved[8]` at 184-191 intact -- audit item **A**. The old encoder
+     * started from a `0xFF` fill and routed anything wider than two bytes through
+     * a UTF-8 string, which deleted a `can_node` of `0x20` and turned a `filter_hz`
+     * of `0xC8` into 253.
+     *
+     * Reading first costs one 192-byte exchange and buys two things: a patch is a
+     * legitimate input (the caller does not have to hold a whole image), and a
+     * byte another client moved since the last read is not silently reverted.
+     *
+     * ⚠️ **Not verified yet.** Block 6 owns read-back verification, and its
+     * verification must exempt byte 2 -- the bootloader force-overwrites it with
+     * its own version inside every EEPROM write (AM32-bootloader
+     * `main.c:517-524`), so a byte-for-byte compare of the whole image always
+     * fails there.
+     */
+    writeSettings (target: number, patch: Partial<EscSettings>): Promise<WriteSettingsResult> {
+        return this.exclusive(() => this.writeSettingsImpl(target, patch));
+    }
+
+    private writeSettingsImpl (target: number, patch: Partial<EscSettings>): Promise<WriteSettingsResult> {
+        this.requirePassthrough();
+
+        return this.labelled(target, async () => {
+            const { mcu } = await this.selectTarget(target);
+            const eepromOffset = mcu.getEepromOffset();
+
+            const base = await this.fourWay.readAddress(eepromOffset, EEPROM_SIZE);
+            const layoutRevision = base[EepromLayout.LAYOUT_REVISION.offset] ?? 0;
+            const image = encodeSettings(base, patch, layoutRevision);
+
+            if (bytesEqual(image, base)) {
+                this.emitter.emit('log', {
+                    level: 'info',
+                    message: `ESC #${target + 1}: no changed settings to write`
+                });
+                return { target, changed: false, settings: decodeSettings(base, layoutRevision), image: base };
+            }
+
+            this.emitter.emit('progress', { phase: 'write', current: 0, total: 1, target });
+            // One `cmd_DeviceWrite` of the whole 192 bytes, at the page base. It
+            // has to be the whole struct: the write erases the page first, so a
+            // partial sub-range would program without erasing and fail the
+            // bootloader's own memcmp. `cmd_DeviceWriteEEprom` is not an option --
+            // AM32 answers `CMD_PROG_EEPROM` with `brERRORCOMMAND`
+            // (AM32-bootloader main.c:674-675) while ArduPilot can still report
+            // ACK_OK for it.
+            await this.fourWay.write(eepromOffset, image);
+            this.emitter.emit('progress', { phase: 'write', current: 1, total: 1, target });
+            this.emitter.emit('log', { level: 'info', message: `ESC #${target + 1}: settings written` });
+
+            return { target, changed: true, settings: decodeSettings(image, layoutRevision), image };
+        });
+    }
+
+    /**
+     * Flash an Intel HEX firmware image to one channel, then reset it and read it
+     * back.
+     *
+     * The shape, and why each step is where it is:
+     *
+     *  1. **Check the image against the ESC in front of us**, unless the caller
+     *     opted out. The app compared every flash against channel 0's firmware
+     *     name; this reads the name off the channel it is about to write, which is
+     *     the only one that matters on a mixed board.
+     *  2. **Clear EEPROM byte 0, then stream, then set it back to 1.** The
+     *     bootloader jumps to the application only when that byte is `0x01` or
+     *     `0xFF` (AM32-bootloader `main.c:306-319`, `CHECK_EEPROM_BEFORE_JUMP`
+     *     defaults on), so `0x00` means "there is no complete application here".
+     *     A flash that dies half way therefore leaves a board that comes up in its
+     *     bootloader instead of running half an image. `EscView` renders that
+     *     state as "Flash was unsuccessful".
+     *  3. **Ascending, page-aligned, 256-byte chunks from the firmware start up to
+     *     the EEPROM page.** The bootloader erases a page only when the write
+     *     address is page-aligned (`Mcu/f051/Src/eeprom.c:34-44`), so the order is
+     *     not a style choice; and the application image genuinely ends where the
+     *     EEPROM page begins (`STM32F051K6TX_FLASH.ld:43-46`), with the 32-byte
+     *     firmware-name block as its last bytes.
+     *  4. **Reset and re-read.** The caller gets the ESC's actual post-flash state
+     *     rather than the image it asked for.
+     *
+     * No timeout is a parameter: the page-write budget comes from `TimeoutPolicy`.
+     * The call site that passed 200 ms for an operation the FC budgets ~700 ms for
+     * was audit item **C**.
+     *
+     * Block 6 owns the verify pass (`cmd_DeviceVerify` cannot help -- AM32 answers
+     * `CMD_VERIFY_FLASH_ARM` with `brERRORCOMMAND`, so it has to be a read-back)
+     * and should decide whether a failed chunk retries from its page base, the way
+     * AM32's own bootloader updater does (`AM32/Src/bootloader_update.c:78-108`).
+     */
+    flash (target: number, hex: string, options: FlashOptions = {}): Promise<McuInfo> {
+        return this.exclusive(() => this.flashImpl(target, hex, options));
+    }
+
+    private flashImpl (target: number, hex: string, options: FlashOptions): Promise<McuInfo> {
+        this.requirePassthrough();
+
+        return this.labelled(target, async () => {
+            const parsed = parseHex(hex);
+            if (!parsed || parsed.data.length === 0) {
+                throw new SessionError('image', 'not a valid Intel HEX file', { target });
+            }
+
+            const { mcu } = await this.selectTarget(target);
+            const last = parsed.data[parsed.data.length - 1] as HexData;
+            const image = fillImage(parsed, last.address + last.bytes - mcu.getFlashOffset(), mcu.getFlashOffset());
+            if (!image) {
+                throw new SessionError(
+                    'image',
+                    `the hex addresses flash this ${mcu.getName()} does not have`,
+                    { target }
+                );
+            }
+
+            if (!options.allowMcuMismatch) {
+                await this.checkImageMatchesEsc(target, image, mcu);
+            }
+
+            const eepromOffset = mcu.getEepromOffset();
+            const settingsImage = await this.fourWay.readAddress(eepromOffset, EEPROM_SIZE);
+
+            await this.writeBootByte(eepromOffset, settingsImage, 0x00);
+            await this.writeFirmware(target, image, mcu);
+            await this.writeBootByte(eepromOffset, settingsImage, 0x01);
+
+            this.emitter.emit('progress', { phase: 'reset', current: 0, total: 1, target });
+            await this.fourWay.reset(target);
+            this.emitter.emit('progress', { phase: 'reset', current: 1, total: 1, target });
+            await this.clock.sleep(Mcu.RESET_DELAY_MS);
+
+            this.emitter.emit('progress', { phase: 'read', current: 0, total: 1, target });
+            const info = await this.readEscUnlabelled(target);
+            this.emitter.emit('progress', { phase: 'read', current: 1, total: 1, target });
+            this.emitter.emit('esc', { target, status: 'ok', info });
+
+            return info;
+        });
+    }
+
+    /**
+     * Reject a hex built for a different board before anything is written.
+     *
+     * Both halves of the app's check, against the *target* channel's own name:
+     * the MCU suffix (`..._F051`) and the layout prefix (`ARK_4IN1_...`). An ESC
+     * whose name does not read back -- a fresh or half-flashed board -- skips the
+     * check rather than becoming unflashable, which is what the app did by
+     * accident and is the right behaviour on purpose: that board is exactly the
+     * one that needs flashing.
+     */
+    private async checkImageMatchesEsc (target: number, image: Uint8Array, mcu: Mcu): Promise<void> {
+        const nameAt = mcu.getEepromOffset() - FIRMWARE_NAME_BYTES;
+        const hexName = decodeBytesZ(image.subarray(nameAt, nameAt + FIRMWARE_NAME_BYTES)).trim();
+        if (!FIRMWARE_NAME_PATTERN.test(hexName)) {
+            throw new SessionError(
+                'image',
+                'the hex carries no firmware name at the expected address, so it cannot be checked ' +
+                'against this ESC -- it is probably built for another MCU, or too old. ' +
+                'Flash it anyway with allowMcuMismatch.',
+                { target }
+            );
+        }
+
+        const escName = decodeBytesZ(
+            await this.fourWay.readAddress(nameAt, FIRMWARE_NAME_BYTES)
+        ).trim();
+        if (!FIRMWARE_NAME_PATTERN.test(escName)) {
+            this.emitter.emit('log', {
+                level: 'warn',
+                message: `ESC #${target + 1}: no firmware name to check the hex against; flashing ${hexName}`
+            });
+            return;
+        }
+
+        const escMcuType = escName.slice(escName.lastIndexOf('_') + 1);
+        if (!hexName.endsWith(escMcuType)) {
+            throw new SessionError(
+                'image',
+                `invalid MCU type in the hex: the ESC is a ${escMcuType} and the hex is ${hexName}`,
+                { target }
+            );
+        }
+
+        const hexLayout = hexName.slice(0, hexName.lastIndexOf('_'));
+        const escLayout = escName.slice(0, escName.lastIndexOf('_'));
+        if (hexLayout !== escLayout) {
+            throw new SessionError(
+                'image',
+                `layout does not match: the ESC runs ${escLayout} and the hex is ${hexLayout}`,
+                { target }
+            );
+        }
+    }
+
+    /** Rewrite the settings page with byte 0 forced to `value`. */
+    private async writeBootByte (eepromOffset: number, settingsImage: Uint8Array, value: number): Promise<void> {
+        const image = new Uint8Array(settingsImage);
+        image[EepromLayout.BOOT_BYTE.offset] = value;
+        await this.fourWay.write(eepromOffset, image);
+    }
+
+    /**
+     * Stream the application region, in ascending 256-byte chunks.
+     *
+     * The bounds are derived from the MCU variant rather than the app's hardcoded
+     * pages 4..0x40. The floor matters: `firmware_start` is 0x1000 on the F051 and
+     * the ARM64K part but 0x4000 on the NXP one, and writing below the
+     * bootloader's `APPLICATION_ADDRESS` is refused outright
+     * (AM32-bootloader `main.c:443-446`). The ceiling matters more: the app's
+     * 0x40 was the *end of flash*, so a hex whose records reached that far would
+     * have taken the settings page with it. The application image ends where the
+     * EEPROM page begins.
+     */
+    private async writeFirmware (target: number, image: Uint8Array, mcu: Mcu): Promise<void> {
+        const begin = mcu.getFirmwareStart();
+        const end = Math.min(image.length, mcu.getEepromOffset());
+        const total = Math.max(0, end - begin);
+
+        this.emitter.emit('progress', { phase: 'flash', current: 0, total, target });
+        if (total === 0) {
+            this.emitter.emit('log', {
+                level: 'warn',
+                message: `ESC #${target + 1}: the hex contains nothing above the firmware start; nothing written`
+            });
+            return;
+        }
+
+        let written = 0;
+        for (let address = begin; address < end; address += FLASH_CHUNK_BYTES) {
+            const chunk = image.subarray(address, Math.min(address + FLASH_CHUNK_BYTES, end));
+            await this.fourWay.write(address, chunk);
+            written += chunk.length;
+            this.emitter.emit('progress', { phase: 'flash', current: written, total, target });
+        }
     }
 
     /** `cmd_DeviceReset` -- leave the bootloader and run the application again. */
@@ -594,6 +904,33 @@ export class Am32Session {
         const result = this.tail.then(work);
         this.tail = result.then(() => undefined, () => undefined);
         return result;
+    }
+
+    /**
+     * Run `work` and make sure anything it throws says which ESC it belonged to.
+     *
+     * Not cosmetic: `EscResult.error` is the only thing a client has to show for a
+     * failed channel, and before this only the init-flash path named one. A read
+     * failure surfaced as a bare
+     * `cmd_DeviceRead failed: no complete response within 500ms`.
+     *
+     * The reason and the ACK are carried up from the innermost `SessionError`,
+     * because `Link.request` wraps whatever `validate` throws in a `LinkError` --
+     * so `esc-read` for a short reply as against `esc-command` for a refused ACK
+     * is one or two levels down. Flattening that loses exactly the information
+     * the session exists to keep.
+     */
+    private async labelled<T> (target: number, work: () => Promise<T>): Promise<T> {
+        try {
+            return await work();
+        } catch (error) {
+            const inner = causedBySessionError(error);
+            throw new SessionError(
+                inner?.reason ?? 'esc-command',
+                `ESC #${target + 1}: ${describeError(error)}`,
+                { cause: error, target, ack: inner?.ack }
+            );
+        }
     }
 
     private setState (state: SessionState): void {

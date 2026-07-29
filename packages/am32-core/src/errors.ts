@@ -25,6 +25,14 @@ export type SessionErrorReason =
     | 'esc-read'
     /** Any other 4-way command answered with a non-OK ACK. */
     | 'esc-command'
+    /**
+     * The firmware image the caller handed us is unusable: not Intel HEX, or
+     * built for a different board than the ESC in front of us.
+     *
+     * Distinct from the `esc-*` reasons because nothing was attempted on the
+     * wire -- it is a bad argument, and block 7 maps it to a different exit code.
+     */
+    | 'image'
     /** The call needs a `connect()` that has not happened. */
     | 'not-connected';
 

@@ -121,30 +121,6 @@
               </div>
             </div>
           </template>
-          <template #bootloader_data>
-            <div v-if="getFolder('bootloader').value" class="p-4">
-              <UAccordion color="teal" :items="getChildrenFolder(getFolder('bootloader').value)" variant="outline" size="sm">
-                <template #files="{ item }">
-                  <div class="grid grid-cols-4">
-                    <div v-for="file of item.files" :key="file" class="py-1">
-                      <ULink
-                        :to="getFileLink(file)"
-                        external
-                        :download="file.name"
-                        class="transition-all hover:text-red-500"
-                        :class="{
-                          'text-gray-500/20': filter && !file.name.toLowerCase().includes(filter.toLowerCase()),
-                          'text-red-500': filter && file.name.toLowerCase().includes(filter.toLowerCase())
-                        }"
-                      >
-                        {{ file.name }}
-                      </ULink>
-                    </div>
-                  </div>
-                </template>
-              </UAccordion>
-            </div>
-          </template>
           <template #unlocker_data>
             <div v-if="getFolder('unlocker').value" class="p-4">
               <UAccordion color="teal" :items="getChildrenFolder(getFolder('unlocker').value)" variant="outline" size="sm">
@@ -183,7 +159,6 @@ const filter = ref('');
 const sectionLabels: Record<string, string> = {
     releases: 'RELEASES',
     'kiss-ultra-releases': 'KISS ULTRA RELEASES',
-    bootloader: 'BOOTLOADER',
     tools: 'TOOLS',
     unlocker: 'UNLOCKER'
 };

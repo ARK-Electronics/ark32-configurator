@@ -36,13 +36,6 @@ export default defineNitroPlugin(() => {
         db: 1
     });
 
-    const bootloaders = redisDriver({
-        base: 'redis',
-        host: redisHost,
-        port,
-        db: 2
-    });
-
     const binaries = redisDriver({
         base: 'redis',
         host: redisHost,
@@ -66,7 +59,6 @@ export default defineNitroPlugin(() => {
 
     storage.mount('tools', tools);
     storage.mount('releases', releases);
-    storage.mount('bootloaders', bootloaders);
     storage.mount('binaries', binaries);
     storage.mount('schema', schema);
     storage.mount('kiss-ultra', kissUltra);

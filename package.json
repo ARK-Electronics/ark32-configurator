@@ -8,6 +8,7 @@
     "generate": "prisma generate && nuxt generate",
     "prepare": "nuxt prepare",
     "preview": "nuxt preview",
+    "start": "node .output/server/index.mjs",
     "upload:files": "node deploy-files/upload.ts",
     "lint": "eslint --ext .ts,.js,.vue .",
     "prisma:generate": "prisma generate",

@@ -9,6 +9,7 @@ Landed on `master` on top of `1b31d9c`:
 | `dd62059` | `style(core): use named exports and named fast-check imports` |
 | `41ee527` | `fix(esc): read the layout revision from the ESC's own eeprom byte` |
 | `4622003` | `fix(core): drop unparseable RX bytes instead of buffering them forever` |
+| `f212e65` | `fix(ui): gate the two min-revision-3 fields the codec now hides` |
 | (this file) | the handoff note |
 
 ## Verification
@@ -167,6 +168,9 @@ None of these are cosmetic. If a hardware checkpoint misbehaves, start here.
   blank instead of showing bytes that meant something else. That is correct: the
   firmware overwrites those bytes with defaults on the v2→v3 upgrade path
   (`Src/settings.c:23-36`), so editing them on a v2 ESC never did anything.
+  `f212e65` gates the two UI controls that were missing a version guard
+  (`ACTIVE_BRAKE_POWER`, `DISABLE_STICK_CALIBRATION`) so they disappear on a v2
+  ESC instead of rendering blank and dropping edits.
 - **An MSP reply whose command does not echo the request is now rejected.** The
   one place this bites in practice is ArduPilot's failed `MSP_SET_PASSTHROUGH`,
   which replies with the command field set to `0x0F` (`AP_BLHeli.cpp:593-595`,
@@ -241,10 +245,18 @@ Firmware facts worth not re-deriving:
 - **`crc8DvbS2` is poly 0xD5, init 0**; the v2 CRC covers the five header bytes
   plus the payload.
 - **AM32 byte 0x02 (`BOOT_LOADER_REVISION`) cannot be written from the host.**
-  The bootloader overwrites it with its own version inside the eeprom write
-  (`AM32-bootloader/bootloader/main.c:517-525`). Block 6 is already scheduled to
-  drop the `bootloader.version === 0xFF` auto-write in `getInfo`; this is a second
-  reason it is pointless.
+  The bootloader force-overwrites it with its own version inside every EEPROM-page
+  write: `AM32-bootloader/bootloader/main.c:503-533`,
+  `if (address == EEPROM_START_ADD && payload_buffer_size > 2) payLoadBuffer[2] = BOOTLOADER_VERSION;`.
+  Two consequences. `four_way.ts`'s "bootloader version unset, setting to 1"
+  write has never had the effect it claims — block 6 drops it. And **block 6's
+  read-back verification must exempt byte 2**, or every settings write will fail
+  verification.
+- **A settings write must always be the full 192 bytes from the page base.** The
+  write erases the whole 1-2 KiB page first (`Mcu/*/Src/eeprom.c`), so a partial
+  sub-range would program without erasing and fail the bootloader's own `memcmp`.
+  192 clears every alignment gate in the MCU families (8-byte on l431, 4-byte
+  elsewhere, and CH32V203's `length + (addr & 0xFF) <= 256`).
 - **Writing 0x05-0x0C without also setting byte 1 to 3 is a no-op**: the firmware
   replaces those bytes with hardcoded defaults on boot whenever
   `eeprom_version < 3` (`Src/settings.c:23-36`) and then persists them.
@@ -267,8 +279,21 @@ Firmware facts worth not re-deriving:
   read regardless of the ACK.** That belongs to block 2 (`link.request`'s
   `validate`) or block 4. Betaflight is deterministic here (`0x00` plus a real
   error ACK), so only ArduPilot needs the rule.
+- ⚠️ **Block 2's own done-when grep does not cover `package.json`.** The plan's
+  command is `grep -rn "webserial-wrapper" components pages stores src packages
+  yarn.lock` — and `webserial-wrapper` is now a *declared* dependency, so that
+  grep can come back empty while the dependency is still in the manifest.
+  **Block 2 must remove it from `package.json` too and re-run `yarn install`.**
 - **`@am32/serial-msp` is gone; `webserial-wrapper` and `queue` remain** — blocks
   2 and 5.
+- **Three MSP call sites in `SerialDevice.vue` have no `.catch`** (`:607`, `:612`,
+  `:617`, plus the passthrough await at `:623`). Now that an `!` frame and an echo
+  mismatch are rejected instead of being returned as data, a `$M!` reply to
+  `MSP_FC_VARIANT` fails the whole connect where it used to log
+  `Unknown fc type ''` and carry on. No FC in the two trees errors that command,
+  so this is close to theoretical — but block 4's `connect()` is where it gets
+  handled deliberately, and it should surface "passthrough setup failed" rather
+  than an unhandled rejection.
 - Audit items **B**, **C**, **E**, **G**, **H** are untouched by design, and
   `four_way.ts` still carries all of them. See the drift table for where they
   moved to.

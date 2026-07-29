@@ -82,7 +82,8 @@
                     :switches="[{
                       field: 'DISABLE_STICK_CALIBRATION',
                       name: 'Disable stick calibration',
-                      minFirmwareVersion: 'v2.19'
+                      minFirmwareVersion: 'v2.19',
+                      minEepromVersion: 3
                     }]"
                     @change="onSettingsChange"
                   >
@@ -480,6 +481,7 @@
                       @change="onSettingsChange"
                     />
                     <SettingField
+                      v-if="isInEEpromVersion(layoutVersion, 3)"
                       :esc-info="escStore.selectedEscInfo"
                       field="ACTIVE_BRAKE_POWER"
                       name="Active brake power"

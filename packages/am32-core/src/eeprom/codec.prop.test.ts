@@ -141,6 +141,33 @@ describe('audit A: the CAN block survives a save', () => {
     });
 });
 
+describe('decode coverage', () => {
+    it('decodes every layout field at revision 3', () => {
+        // The round-trip property above cannot catch a field that decode
+        // silently drops: encoding starts from the same base, so the missing
+        // bytes are carried through and the image still matches. This is the
+        // assertion that catches it.
+        const settings = decodeSettings(image(i => i), 3);
+        const missing = Object.keys(EepromLayout).filter(name => settings[name] === undefined);
+        expect(missing).toEqual([]);
+    });
+
+    it('decodes exactly the ungated fields at revision 2', () => {
+        const settings = decodeSettings(image(i => i), 2);
+        const absent = Object.keys(EepromLayout).filter(name => settings[name] === undefined);
+        expect(absent).toEqual([
+            'MAX_RAMP',
+            'MINIMUM_DUTY_CYCLE',
+            'DISABLE_STICK_CALIBRATION',
+            'ABSOLUTE_VOLTAGE_CUTOFF',
+            'CURRENT_P',
+            'CURRENT_I',
+            'CURRENT_D',
+            'ACTIVE_BRAKE_POWER'
+        ]);
+    });
+});
+
 describe('version-gated fields', () => {
     it('carries fields excluded at revision 2 through untouched', () => {
         const original = image(i => i);

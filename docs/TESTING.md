@@ -1,0 +1,175 @@
+# Testing the ARK32 configurator
+
+Three layers, in increasing order of cost and decreasing order of how often they
+run.
+
+| Layer | Command | Runs on |
+|---|---|---|
+| Unit + property | `yarn test` | every push, every block |
+| Integration against the simulator | `yarn test` (same suite) | every push, every block |
+| Hardware checkpoints | by hand, with a board plugged in | twice in the whole overhaul |
+
+`yarn verify` — `lint && typecheck:core && typecheck:app && test` — is the gate.
+It must exit 0 before any overhaul block is called done, and CI runs it on push
+and PR.
+
+## Unit and property tests
+
+Framing golden vectors, the EEPROM round-trip property test, the hex parser, the
+timeout policy table, the clock. They live beside the code as `*.test.ts` under
+`packages/`.
+
+The one that carries the most weight is
+`packages/am32-core/src/eeprom/codec.prop.test.ts`: fast-check over random
+192-byte images, asserting decode → encode is byte-identical and that bytes
+13–16 and 176–183 survive untouched. That is audit item **A** pinned as a
+property rather than as an example.
+
+## Integration tests against `am32-sim`
+
+`packages/am32-sim` is a stateful simulator of a flight controller and its ESCs
+behind the same `Transport` interface as the real ones. It is a peer of
+`am32-web`, not a test-only mock — issue #3 section 7.3 — so anything the
+session layer needs that a transport cannot provide shows up immediately as a
+hole in it rather than as a workaround above it.
+
+Its fidelity comes from the firmware sources, all checked out locally and listed
+in `CLAUDE.md`. Read them with a subagent; they are large and you need one answer
+from each.
+
+**Everything runs on a virtual clock.** `packages/am32-core/src/clock.ts`
+provides `VirtualClock`, and nothing below the session layer may call `Date.now()`
+or `setTimeout` — `scripts/assert-core-hygiene.sh` fails the build if it does.
+The payoff is direct: the session suite covers tens of seconds of protocol time,
+including ArduPilot's 4 s MAVLink window and a 2 s passthrough settle, in tens of
+milliseconds of wall time. A slow test therefore means a hang, not a slow
+machine.
+
+Tests advance the clock explicitly rather than waiting:
+
+```ts
+const promise = session.connect();
+await clock.runAll();            // or the `drive()` helper in the session tests
+const fc = await promise;
+```
+
+### Fault injection
+
+Every knob maps to a bug the audit in issue #3 found, so the fixes stay fixed.
+`scripts/assert-fault-coverage.sh` requires each one to be implemented in
+`packages/am32-sim` *and* named by a `describe('fault knob: …')` suite.
+
+| Knob | Regression it guards |
+|---|---|
+| `esc[n].unresponsive` | a partial enumerate must degrade, not throw (**B**) |
+| `esc[n].slowBy(ms)` | the timeout policy must cover the FC's real budget (**C**) |
+| `esc[n].corruptCrc`, `esc[n].shortRead` | retry and drain must recover without poisoning the next ESC |
+| `fc.mspError(cmd)` | an MSP `!` frame must not parse as success (**D**) |
+| `fc.mavlinkIdleGate` | the ArduPilot connect must probe-then-wait, not wait unconditionally (**H**) |
+| `fc.blockingFourWay` | Betaflight passthrough must not expect MSP (**H**) |
+| `link.dropBytes`, `link.injectGarbage` | framing must resynchronise; drain must clear stale RX (**E**, **G**) |
+| `esc[n].canBlock = [...]` | a settings round-trip must preserve bytes 176–183 exactly (**A**) |
+
+The gate is a *presence* check. What proves a knob works is mutating its
+implementation and watching a specific test go red — see the mutation tables in
+`docs/plans/overhaul/notes/block-3.md` and `block-4.md`. Do that before believing
+a new guard; block 3 found one that was unreachable and block 4 removed another
+for the same reason.
+
+## Hardware checkpoints
+
+The simulator has never been checked against real silicon, and that is by design
+(issue #3 section 7.5): fidelity comes from the firmware sources, and divergence
+is caught here, at two fixed points. Neither is optional — the UI is rewritten
+wholesale in block 5 and nothing else in the plan touches real hardware.
+
+Record what you saw, in this file, under the checkpoint.
+
+### Checkpoint 1 — after block 4: connect and enumerate
+
+**Status: outstanding.** Blocks 1a, 1b, 2, 3 and 4 have all landed without it.
+
+Rig: an ARK FPV with 4 ESCs, and separately a Betaflight board. Close Mission
+Planner and QGroundControl first — they hold the MAVLink port.
+
+1. Connect to the ArduPilot board. Confirm it enumerates all four ESCs.
+2. Connect to the Betaflight board. Confirm it enumerates.
+3. Pull the signal wire on one channel and enumerate again: the other three must
+   still come back, and the UI must show one error rather than dying.
+
+What to watch for, accumulated from the notes of every block since the last time
+anything ran on hardware:
+
+- **The 4-way read timeout dropped from 1500 ms to 769 ms** (192-byte settings
+  read, generic variant) in block 2. That is the one number in the whole overhaul
+  that moved *down*, and PR #1's 1500 ms was a guess rather than a measurement.
+  If reads start timing out, raise `HOST_MARGIN_MS` in
+  `packages/am32-core/src/link/timeout-policy.ts` or construct the policy with
+  `{ scale: 2 }` — do **not** add a literal at a call site.
+- **The flash page write went from 200 ms to ~1000 ms** (block 2, audit **C**).
+  Flashing should be more reliable, and roughly 12 s faster from the drain change
+  alone.
+- **The settings read is 192 bytes, not 184** (block 1b). Still inside the
+  firmware's 256-param limit and inside the EEPROM page on every variant.
+- **Version gating went from disabled to enabled** (block 1b). On ARK hardware
+  this changes nothing — `ark-release` writes `eeprom_version = 3` — but on a
+  layout-revision-2 ESC the eight fields at 0x05–0x0C now render blank instead of
+  showing bytes that meant something else.
+- **Native timers instead of the Web Worker "HackTimer"** the deleted Web Serial
+  wrapper installed (block 2). Chrome clamps `setTimeout` to ≥1 s in a
+  backgrounded tab. Protocol timeouts firing late are safe; what gets slower is
+  deliberate pacing. Keep the tab foregrounded while flashing.
+- **The connect no longer waits 4.5 s before its first MSP frame** (block 4,
+  audit **H**). It probes immediately, tries a 4-way escape, and only then polls
+  through the MAVLink window for up to 8 s. On ArduPilot the connect should land
+  a little after the window opens; on Betaflight it should be effectively
+  instant. If ArduPilot now fails to connect where it used to succeed, that is
+  the highest-value thing this checkpoint can find.
+
+### Checkpoint 2 — after block 6: settings round-trip and flash
+
+**Status: outstanding** (block 6 has not run).
+
+Rig: an ARK FPV with 4 ESCs and a populated CAN block.
+
+1. Read settings. Change one field. Write. **Power-cycle the ESC.** Read back.
+   Bytes 176–183 must be unchanged and the edited field must have stuck. That is
+   audit item **A** closed on real hardware.
+2. Flash a local `.hex`. Confirm it completes and the ESC boots.
+
+Known simulator/hardware divergence risks, in the order block 3 said to doubt
+them:
+
+1. The per-operation **durations** in `packages/am32-sim/src/esc.ts` are invented
+   within the firmware's budgets rather than measured.
+2. The bootloader-version stamp on EEPROM byte 2 assumes `BOOTLOADER_VERSION` is
+   18; a different ARK build stamps a different number.
+3. `FIRMWARE_START` is modelled as `0x1000`, which is AM32's
+   `FIRMWARE_RELATIVE_START` — but that constant is **`0x4000` on a
+   `DRONECAN_SUPPORT` build**. Check the ARK AM32 build before block 6's flash
+   tests are trusted.
+
+## Running the app locally
+
+```
+./run.sh                # dev server + browser; no MariaDB, MinIO or Redis needed
+./run.sh --no-browser   # for a headless check
+```
+
+`yarn verify` green does **not** mean the app builds: `app.vue` has no
+`lang="ts"`, so `vue-tsc` does not typecheck it, and a deleted module can leave a
+dangling import there that only `yarn build` finds. Run `yarn build` before
+claiming a deletion is complete.
+
+`yarn verify` also cannot see a broken Vite alias. After any block that adds a
+package or a module the app imports, start the dev server and fetch the module
+through it:
+
+```
+curl -o /dev/null -w '%{http_code}\n' http://localhost:3067/_nuxt/packages/am32-core/src/session.ts
+```
+
+A 200 with the expected symbols in the transformed output means Vite resolved and
+transformed it in the browser graph. `am32-sim` is deliberately **not** aliased
+in `nuxt.config.ts` and nothing in the app imports it; confirm it stays out of
+the client bundle with `grep -rl am32-sim .output/public` after a build.

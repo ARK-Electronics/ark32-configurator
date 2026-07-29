@@ -642,13 +642,24 @@ export class Am32Session {
             }
 
             this.emitter.emit('progress', { phase: 'write', current: 0, total: 1, target });
-            // One `cmd_DeviceWrite` of the whole 192 bytes, at the page base. It
-            // has to be the whole struct: the write erases the page first, so a
-            // partial sub-range would program without erasing and fail the
-            // bootloader's own memcmp. `cmd_DeviceWriteEEprom` is not an option --
-            // AM32 answers `CMD_PROG_EEPROM` with `brERRORCOMMAND`
-            // (AM32-bootloader main.c:674-675) while ArduPilot can still report
-            // ACK_OK for it.
+            // One `cmd_DeviceWrite` of the whole 192 bytes, at the page base, and
+            // it has to be the whole struct.
+            //
+            // **Do not "optimise" this into a partial write.** A write to the page
+            // base erases the whole page first (`Mcu/f051/Src/eeprom.c:34-44`), so a
+            // 16-byte write at `eepromOffset` succeeds with `ACK_OK` and blanks
+            // bytes 16-191 -- the startup melody and the entire CAN block. (A
+            // *mid-page* sub-range fails instead, on the bootloader's own memcmp,
+            // because flash can only clear bits. The dangerous shape is the one
+            // that looks safest.)
+            //
+            // `cmd_DeviceWriteEEprom` is not an option either: AM32 answers
+            // `CMD_PROG_EEPROM` with `brERRORCOMMAND` (AM32-bootloader
+            // `main.c:674-675`), and both host firmwares report that as an error for
+            // an ARM target -- ArduPilot's `cmd_DeviceWriteEEprom` takes the
+            // `default:` branch for `imARM_BLB` and sets `ACK_D_GENERAL_ERROR`
+            // (`AP_BLHeli.cpp:1214`; the ACK_OK-swallowing path at `:1211` is
+            // `imATM_BLB` only).
             await this.fourWay.write(eepromOffset, image);
             this.emitter.emit('progress', { phase: 'write', current: 1, total: 1, target });
             this.emitter.emit('log', { level: 'info', message: `ESC #${target + 1}: settings written` });
@@ -690,7 +701,11 @@ export class Am32Session {
      * Block 6 owns the verify pass (`cmd_DeviceVerify` cannot help -- AM32 answers
      * `CMD_VERIFY_FLASH_ARM` with `brERRORCOMMAND`, so it has to be a read-back)
      * and should decide whether a failed chunk retries from its page base, the way
-     * AM32's own bootloader updater does (`AM32/Src/bootloader_update.c:78-108`).
+     * AM32's own bootloader updater does (`AM32/Src/bootloader_update.c:79-116`,
+     * `off = page_base` at `:112`, bounded by `BL_MAX_PAGE_ATTEMPTS` at `:44`).
+     * Re-sending the same chunk, which is what the link does today, is safe --
+     * reprogramming identical bytes into an already-erased page passes the memcmp --
+     * but it is not the firmware's own model.
      */
     flash (target: number, hex: string, options: FlashOptions = {}): Promise<McuInfo> {
         return this.exclusive(() => this.flashImpl(target, hex, options));

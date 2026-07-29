@@ -16,6 +16,11 @@ cd "$(dirname "$0")/.."
 
 FAIL=0
 SEARCH_DIRS=(components pages server src stores utils layouts composables)
+# Root-level entry points are not in any of the dirs above, and app.vue is
+# <script setup> with no lang="ts" -- vue-tsc does not check it, so a dangling
+# import there survives `yarn verify` and only fails at `yarn build`. It must be
+# searched explicitly.
+SEARCH_FILES=(nuxt.d.ts app.vue run.ts)
 
 fail() { printf '  FAIL  %s\n' "$1"; FAIL=1; }
 pass() { printf '  ok    %s\n' "$1"; }
@@ -23,7 +28,7 @@ pass() { printf '  ok    %s\n' "$1"; }
 assert_symbol_absent() {
     local symbol="$1" why="$2" hits
     hits=$(grep -rnw --include='*.ts' --include='*.vue' --include='*.d.ts' \
-        -e "$symbol" "${SEARCH_DIRS[@]}" nuxt.d.ts 2>/dev/null || true)
+        -e "$symbol" "${SEARCH_DIRS[@]}" "${SEARCH_FILES[@]}" 2>/dev/null || true)
     if [ -n "$hits" ]; then
         fail "$symbol still present ($why)"
         printf '%s\n' "$hits" | sed 's/^/          /'

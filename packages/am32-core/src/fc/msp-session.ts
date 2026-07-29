@@ -263,7 +263,17 @@ export class MspSession {
         try {
             frame = await this.request(MSP_COMMANDS.MSP_SET_PASSTHROUGH);
         } catch (error) {
-            // ArduPilot's failure reply is `msp_send_ack(ACK_D_GENERAL_ERROR)`
+            // The FC enters passthrough the moment it *sends* that reply, so a
+            // reply we never see leaves it in the 4-way loop while we believe it
+            // is not -- and on Betaflight every later MSP frame is then
+            // swallowed unanswered until someone sends `cmd_InterfaceExit`.
+            // Historically that is the state a user escapes by replugging USB.
+            // One exit frame costs nothing when the FC was never in passthrough:
+            // Betaflight's MSP parser discards a stray `/`, and ArduPilot enters
+            // 4-way on it and leaves again on the same frame.
+            await this.escapeFourWay();
+
+            // ArduPilot's own failure reply is `msp_send_ack(ACK_D_GENERAL_ERROR)`
             // (AP:594) -- a perfectly well-formed `$M>` frame whose *command*
             // field is 0x0F rather than 245, so what surfaces here is the
             // command-echo rejection block 1b added, not a timeout.

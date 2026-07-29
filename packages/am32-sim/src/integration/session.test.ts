@@ -297,6 +297,30 @@ describe('fault knob: fc.mavlinkIdleGate -- probe-then-wait, not wait-then-probe
     });
 });
 
+describe('fault knob: link.dropBytes -- a lost passthrough reply must not strand the FC', () => {
+    it('sends an exit when MSP_SET_PASSTHROUGH fails, because the FC may have entered anyway', async () => {
+        const h = rig({ profile: 'betaflight', escCount: 4 });
+        await drive(h.clock, h.session.connect());
+
+        // Eat the start byte of the reply. The FC entered `esc4wayProcess` the
+        // moment it sent that frame; we never see it, so we believe it did not
+        // -- and from here every MSP frame is swallowed unanswered
+        // (serial_4way.c:453-461). Historically this is the state a user
+        // escapes by replugging USB.
+        h.transport.faults.dropBytes(1, { direction: 'rx' });
+
+        await expect(drive(h.clock, h.session.enterPassthrough())).rejects.toMatchObject({
+            name: 'SessionError',
+            reason: 'passthrough'
+        });
+
+        // The failure path unstranded it, so the next attempt is not doomed.
+        expect(h.fc.inPassthrough).toBe(false);
+        expect(h.session.state).toBe('connected');
+        expect(await drive(h.clock, h.session.enterPassthrough())).toBe(4);
+    });
+});
+
 describe('fault knob: fc.blockingFourWay -- MSP is refused in passthrough, on both firmwares', () => {
     it('will not put an MSP frame on the wire while the FC is in 4-way', async () => {
         for (const profile of ['ardupilot', 'betaflight'] as const) {

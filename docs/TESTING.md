@@ -85,9 +85,27 @@ wholesale in block 5 and nothing else in the plan touches real hardware.
 
 Record what you saw, in this file, under the checkpoint.
 
+## What is *not* covered by `yarn verify`
+
+`vitest.config.ts` collects `packages/**` only, so **nothing under `components/`,
+`pages/`, `stores/` or `composables/` has an automated test**. The app layer is
+covered by `vue-tsc` (types and template references), `yarn lint`, `yarn build`
+and reading it — and that is all. Block 5 rewrote that whole layer, so the
+hardware checkpoint below is the first thing that has ever executed it.
+
+Two consequences worth planning around:
+
+- A behaviour that matters must live in `am32-core`, where it can be tested
+  against the simulator. That is the reason `session.flash()` owns the boot-byte
+  bracket, the page range and the MCU-layout check rather than the Vue component:
+  the component half of a rule is a rule nothing checks.
+- Adding a component test environment (jsdom + `@nuxt/test-utils`) is a harness
+  decision nobody has taken. Blocks 1a, 2 and 5 have each declined to take it
+  unilaterally. If the UI grows logic worth testing, that is the conversation.
+
 ### Checkpoint 1 — after block 4: connect and enumerate
 
-**Status: outstanding.** Blocks 1a, 1b, 2, 3 and 4 have all landed without it.
+**Status: outstanding.** Blocks 1a, 1b, 2, 3, 4 and 5 have all landed without it.
 
 Rig: an ARK FPV with 4 ESCs, and separately a Betaflight board. Close Mission
 Planner and QGroundControl first — they hold the MAVLink port.
@@ -125,6 +143,18 @@ anything ran on hardware:
   a little after the window opens; on Betaflight it should be effectively
   instant. If ArduPilot now fails to connect where it used to succeed, that is
   the highest-value thing this checkpoint can find.
+- **Connect no longer enters passthrough** (block 5). It identifies the FC and
+  stops; passthrough happens on the first Read, Save or Flash. So "Connect" is
+  now fast and quiet, and the ESC cards stay empty until Read is pressed — that
+  is deliberate, not a regression.
+- **Every button is one session call** (block 5). The UI holds no protocol code
+  at all, so a failure that used to be a silent `console.error` now shows as a
+  toast plus a log line. If something fails, the log panel should say which ESC
+  and why; if it does not, that is a finding worth writing down.
+- **A settings write re-reads the ESC first** (block 5). `writeSettings` builds
+  its 192 bytes from a fresh read rather than from the buffer the UI is holding,
+  so a save costs one extra read per ESC and cannot revert a byte another client
+  moved. Still unverified after the write — block 6 adds that.
 
 ### Checkpoint 2 — after block 6: settings round-trip and flash
 
@@ -137,6 +167,21 @@ Rig: an ARK FPV with 4 ESCs and a populated CAN block.
    audit item **A** closed on real hardware.
 2. Flash a local `.hex`. Confirm it completes and the ESC boots.
 
+Block 5 moved the write and the flash into `Am32Session`, so both are live as of
+that block even though block 6 owns their verification. Two extra things to watch
+while doing step 2:
+
+- **The flash stops at the EEPROM page**, not at the end of flash. The
+  application region is 0x1000–0x7C00 on the F051 and its last 32 bytes are the
+  firmware-name block the configurator identifies the ESC by
+  (`AM32/Mcu/f051/STM32F051K6TX_FLASH.ld:43-46`). After a flash, the ESC's
+  reported firmware name must be the *new* one.
+- **The boot byte is cleared before the first page and set after the last.** Pull
+  USB half way through a flash on purpose: the ESC must come back up in its
+  bootloader (`EscView` shows "Flash was unsuccessful"), not run a half-written
+  image. The bootloader jumps only on `0x01` or `0xFF`
+  (`AM32-bootloader/bootloader/main.c:306-319`).
+
 Known simulator/hardware divergence risks, in the order block 3 said to doubt
 them:
 
@@ -144,10 +189,14 @@ them:
    within the firmware's budgets rather than measured.
 2. The bootloader-version stamp on EEPROM byte 2 assumes `BOOTLOADER_VERSION` is
    18; a different ARK build stamps a different number.
-3. `FIRMWARE_START` is modelled as `0x1000`, which is AM32's
-   `FIRMWARE_RELATIVE_START` — but that constant is **`0x4000` on a
-   `DRONECAN_SUPPORT` build**. Check the ARK AM32 build before block 6's flash
-   tests are trusted.
+3. ~~`FIRMWARE_START` may be `0x4000` on a `DRONECAN_SUPPORT` build.~~ **Settled
+   in block 5: `0x1000` is correct for ARK's shipped F051 firmware.** The
+   bootloader Makefile only defines `DRONECAN_SUPPORT=1` for `_CAN`-suffixed
+   targets (`AM32-bootloader/Makefile:105`), the app links its vector table at
+   `0x08001000` (`STM32F051K6TX_FLASH.ld:43`) and the factory-image script uses a
+   4 KiB bootloader region (`AM32/scripts/build_factory_image.py:31-33`). If ARK
+   ever ships a `_CAN` target this comes back: `SimEsc`'s `FIRMWARE_START` and
+   `Mcu.variants[...].firmware_start` would both need to be 0x4000 for it.
 
 ## Running the app locally
 

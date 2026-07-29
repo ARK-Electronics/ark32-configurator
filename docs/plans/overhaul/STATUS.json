@@ -14,9 +14,9 @@
         {
             "id": "0.5",
             "title": "Verification harness",
-            "status": "done",
+            "status": "in-review",
             "doneWhen": "yarn verify exits 0; CI runs it on push and PR",
-            "landedIn": "chore/verification-harness",
+            "landedIn": "PR #5 (chore/verification-harness) -- merge before starting block 1a",
             "notes": "vitest + fast-check, packages/am32-core skeleton with DOM/Node-free tsconfig, lint baseline to 0 errors, CLAUDE.md, this file, /block skill."
         },
         {

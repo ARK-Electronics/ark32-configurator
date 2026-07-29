@@ -32,6 +32,12 @@ class FakePort {
     }
 
     close (): Promise<void> {
+        // Chrome rejects `port.close()` while either stream is still locked, so
+        // this fake does too: forgetting to release a lock has to be a failure
+        // here, not a silently leaked port.
+        if (this.readable?.locked || this.writable?.locked) {
+            return Promise.reject(new Error('cannot close a port whose streams are locked'));
+        }
         this.closeCalls += 1;
         this.readable = null;
         this.writable = null;
@@ -128,6 +134,8 @@ describe('WebSerialTransport', () => {
 
         await transport.close();
         expect(transport.isOpen).toBe(false);
+        // Both locks released before the port was closed, or the fake would have
+        // rejected -- which is exactly what Chrome does.
         expect(port.closeCalls).toBe(1);
 
         // The port is gone, so this is a no-op -- the point is that the loop is

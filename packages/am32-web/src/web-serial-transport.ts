@@ -107,11 +107,15 @@ export class WebSerialTransport implements Transport {
         const writer = this.writer;
         this.writer = null;
         if (writer) {
-            await writer.close().catch(() => {});
+            // releaseLock rather than close(): `port.close()` only needs the
+            // stream unlocked, and releasing is synchronous. Awaiting a
+            // `writer.close()` on a device that has already gone away can hang,
+            // and this runs on the disconnect button. Every write is awaited by
+            // the link, so there is nothing buffered to lose.
             try {
                 writer.releaseLock();
-            } catch {
-                // Already released by close(); nothing to do.
+            } catch (error: unknown) {
+                this.log(`serial writer release failed: ${asError(error).message}`);
             }
         }
 

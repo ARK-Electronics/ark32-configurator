@@ -299,7 +299,18 @@ export class SimFc implements SimEndpoint {
         const head = this.rx[0] as number;
 
         if (head === DOLLAR && !this.blockingFourWay) {
+            // ArduPilot does not *multiplex* MSP and 4-way, as the plan's quirks
+            // table says -- it switches mode, and the switch has a side effect:
+            // AP:1244-1245 sets `escMode = PROTOCOL_NONE` and then calls
+            // `serial_end()`, which tears down the soft-serial link and marks
+            // every ESC disconnected. So an MSP frame sent during passthrough
+            // succeeds and the *next* 4-way command is the one that fails, a
+            // long way from the cause. Modelling only the mode change would hide
+            // exactly that trap from the session tests.
             this.mode = 'msp';
+            for (const esc of this.escs) {
+                esc.disconnect();
+            }
             return true;
         }
         if (head !== FOUR_WAY_LOCAL_ESCAPE) {

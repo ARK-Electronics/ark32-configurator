@@ -114,6 +114,18 @@ export interface SimEscOptions {
      * is what `Mcu.variants` calls `STM32F051`.
      */
     signature?: number
+    /**
+     * The signature the bootloader *reports*, when that differs from the one
+     * modelled above.
+     *
+     * Exists so the simulator can produce an ESC whose MCU the host's variant
+     * table does not know -- a new part, or a build the configurator has not
+     * been taught about. The flash geometry still comes from {@link signature},
+     * because the ESC has to be *something*; only the four device-info bytes the
+     * host decodes change. Without this the case is unreachable, since `SimEsc`
+     * itself needs a known signature to size its flash.
+     */
+    reportedSignature?: number
     /** `PIN_CODE`: port letter in the high nibble, pin in the low (BL:139). */
     bootloaderPin?: number
     /** Firmware name stored in the 32 bytes below the EEPROM (BL:224-226). */
@@ -221,6 +233,8 @@ export class SimEsc {
     // ---- identity ----------------------------------------------------------
 
     readonly signature: number;
+    /** What `cmd_DeviceInitFlash` hands the host. Usually {@link signature}. */
+    readonly reportedSignature: number;
     readonly bootloaderPin: number;
     readonly bootloaderVersion: number;
 
@@ -238,6 +252,7 @@ export class SimEsc {
     constructor (options: SimEscOptions = {}) {
         const opts = { ...DEFAULTS, ...options };
         this.signature = opts.signature;
+        this.reportedSignature = options.reportedSignature ?? opts.signature;
         this.bootloaderPin = opts.bootloaderPin;
         this.bootloaderVersion = opts.bootloaderVersion;
 
@@ -321,8 +336,8 @@ export class SimEsc {
             data: Uint8Array.from([
                 0x34, 0x37, 0x31,
                 this.bootloaderPin,
-                (this.signature >> 8) & 0xFF,
-                this.signature & 0xFF,
+                (this.reportedSignature >> 8) & 0xFF,
+                this.reportedSignature & 0xFF,
                 0x06,
                 0x02
             ]),
@@ -577,7 +592,11 @@ export class SimEsc {
         this.flash.set(bytes, this.eepromOffset - 32);
     }
 
-    private initEeprom (opts: Required<SimEscOptions>): void {
+    private initEeprom (opts: {
+        layoutRevision: number
+        bootloaderVersion: number
+        firmwareVersion: [number, number]
+    }): void {
         const eeprom = new Uint8Array(EEPROM_SIZE).fill(0x00);
 
         eeprom[EepromLayout.BOOT_BYTE.offset] = 0x01;

@@ -10,6 +10,7 @@ import {
 } from 'am32-core/framing/fourway';
 import { fillImage, parseHex } from 'am32-core/hex';
 import { Mcu, createMcuInfo, type McuInfo } from 'am32-core/mcu';
+import type { FcVariant } from 'am32-core/link/timeout-policy';
 import CommandQueue from '~/src/communication/commands.queue';
 import Serial from '~/src/communication/serial';
 
@@ -20,18 +21,38 @@ export { FOUR_WAY_ACK, FOUR_WAY_COMMANDS };
 export type { FourWayResponse };
 
 /**
- * Soft-serial (ESC line) is 19200 8N1. A 192-byte EEPROM settings read alone is
- * ~100ms on the wire, and the FC budgets ~187ms for the soft-serial RX. End-to-
- * end USB 4-way exchanges therefore need a generous host timeout or the last
- * ESCs in an enumerate loop fail with short reads / checksum errors.
- *
- * Block 2 replaces these literals with the core's TimeoutPolicy.
+ * How many times an exchange is attempted. Timeouts are *not* here any more:
+ * they come from the core's `TimeoutPolicy`, derived from the FC's own published
+ * budgets, so no call site can pass 200 ms for a page write again (audit C).
  */
-export const FOUR_WAY_DEFAULT_TIMEOUT_MS = 1000;
-export const FOUR_WAY_READ_TIMEOUT_MS = 1500;
-export const FOUR_WAY_RETRY_DELAY_MS = 300;
 export const FOUR_WAY_DEFAULT_RETRIES = 10;
 export const FOUR_WAY_INIT_RETRIES = 10;
+
+/** Which FC is in the path, as far as the timeout policy is concerned. */
+const fcVariantFromMspType = (type: MspData['type']): FcVariant => {
+    switch (type) {
+    case 'ardu':
+        return 'ardupilot';
+    // INAV runs Betaflight's serial_4way, including its per-byte start-bit
+    // timeout, so it gets the same budgets.
+    case 'bf':
+    case 'inav':
+        return 'betaflight';
+    default:
+        return 'generic';
+    }
+};
+
+interface FourWaySendOptions {
+    /** Total attempts, matching the meaning the old retry counter had. */
+    retries?: number
+    /**
+     * Bytes the *ESC* moves, which is what the timeout scales with: the
+     * requested count for a read, the written length for a write. Not the number
+     * of 4-way params -- for a read that is 1.
+     */
+    payloadBytes?: number
+}
 
 export class FourWay {
     static instance: FourWay;
@@ -61,7 +82,7 @@ export class FourWay {
 
     makePackage (cmd: FOUR_WAY_COMMANDS, params: number[], address: number) {
         try {
-            return encodeFourWayRequest(cmd, params, address).buffer as ArrayBuffer;
+            return encodeFourWayRequest(cmd, params, address);
         } catch (e: any) {
             this.logError(e.message);
             return undefined;
@@ -69,11 +90,11 @@ export class FourWay {
     }
 
     initFlash (target: number, retries = FOUR_WAY_INIT_RETRIES) {
-        return this.sendWithPromise(FOUR_WAY_COMMANDS.cmd_DeviceInitFlash, [target], 0, retries, FOUR_WAY_DEFAULT_TIMEOUT_MS);
+        return this.sendWithPromise(FOUR_WAY_COMMANDS.cmd_DeviceInitFlash, [target], 0, { retries });
     }
 
     reset (target: number) {
-        return this.sendWithPromise(FOUR_WAY_COMMANDS.cmd_DeviceReset, [target], 0, FOUR_WAY_DEFAULT_RETRIES, FOUR_WAY_DEFAULT_TIMEOUT_MS);
+        return this.sendWithPromise(FOUR_WAY_COMMANDS.cmd_DeviceReset, [target], 0);
     }
 
     /* buildDisplayName(flash: McuInfo, make: string) {
@@ -155,30 +176,20 @@ export class FourWay {
         return info;
     }
 
-    readAddress (address: number, bytes: number, retries = FOUR_WAY_DEFAULT_RETRIES, timeout = FOUR_WAY_READ_TIMEOUT_MS) {
-        // Scale timeout with payload size: wire time at 19200 plus FC/USB overhead.
-        const minForPayload = Math.max(timeout, 500 + bytes * 5);
+    readAddress (address: number, bytes: number, retries = FOUR_WAY_DEFAULT_RETRIES) {
         return this.sendWithPromise(
             FOUR_WAY_COMMANDS.cmd_DeviceRead,
             [bytes === 256 ? 0 : bytes],
             address,
-            retries,
-            minForPayload
+            { retries, payloadBytes: bytes }
         );
     }
 
-    async read (): Promise<void> {
-        try {
-            const readerData: ReadableStreamReadResult<Uint8Array> = await Serial.read<Uint8Array>();
-            if (readerData.value) {
-                this.parseMessage(readerData.value.buffer);
-            }
-        } catch (err) {
-            console.error(`error reading data: ${err}`);
-        }
-    }
-
-    async send (command: FOUR_WAY_COMMANDS, params: number[] = [0], address: number = 0, timeout = FOUR_WAY_DEFAULT_TIMEOUT_MS) {
+    /**
+     * One attempt, no retries, result unparsed. The only caller left is the
+     * `cmd_InterfaceExit` on disconnect, where a failure is not interesting.
+     */
+    async send (command: FOUR_WAY_COMMANDS, params: number[] = [0], address: number = 0) {
         this.log(`Sending ${enumToString(command, FOUR_WAY_COMMANDS)}...`);
 
         const message = this.makePackage(command, params, address);
@@ -189,7 +200,12 @@ export class FourWay {
         }
 
         try {
-            return await Serial.write(message, timeout, isCompleteFourWayFrame);
+            return await Serial.request(message, {
+                probe: isCompleteFourWayFrame,
+                timeout: this.policy().forFourWay(command, params.length),
+                retries: 1,
+                label: enumToString(command, FOUR_WAY_COMMANDS)
+            });
         } catch (e: any) {
             this.logError(`4-way command failed: ${e.message}`);
             return null;
@@ -201,66 +217,81 @@ export class FourWay {
         return this.send(command, params, address);
     }
 
-    sendWithPromise (command: FOUR_WAY_COMMANDS, params: number[] = [0], address = 0, retries = FOUR_WAY_DEFAULT_RETRIES, timeout = FOUR_WAY_DEFAULT_TIMEOUT_MS): Promise<FourWayResponse | null> {
-        let currentTry = 0;
+    /**
+     * Send a 4-way command and return the parsed, ACK_OK response.
+     *
+     * The retry loop, the drain and the timeout all belong to the core's `Link`
+     * now. What was here before was a `new Promise(async (resolve, reject) => ...)`
+     * whose executor swallowed anything thrown outside its inner try -- a drain
+     * or write failure meant the promise never settled and the caller hung
+     * forever. That was audit item G; it is structurally impossible now, because
+     * this is a plain async function.
+     */
+    async sendWithPromise (
+        command: FOUR_WAY_COMMANDS,
+        params: number[] = [0],
+        address = 0,
+        options: FourWaySendOptions = {}
+    ): Promise<FourWayResponse | null> {
+        const label = enumToString(command, FOUR_WAY_COMMANDS);
+        const message = this.makePackage(command, params, address);
 
-        const callback: (resolve: PromiseFn<any>, reject: PromiseFn<any>) => void = async (resolve, reject) => {
-            while (currentTry++ < retries) {
-                // Drop any leftover RX from a previous timed-out or partial exchange.
-                await Serial.drain();
+        if (!message) {
+            throw new Error('message empty!');
+        }
 
-                const started = Date.now();
-                const result = await this.send(command, params, address, timeout).catch((err) => {
-                    console.log(err);
-                    return null;
-                });
-                const elapsed = Date.now() - started;
-                console.log(currentTry, params, enumToString(command, FOUR_WAY_COMMANDS), `elapsed=${elapsed}ms`, `bytes=${result?.length ?? 0}`, result);
-                if (command === FOUR_WAY_COMMANDS.cmd_InterfaceExit) {
-                    resolve(null);
-                    break;
-                }
+        const timeout = this.policy().forFourWay(command, options.payloadBytes ?? params.length);
 
-                if (result) {
-                    try {
-                        const response = this.parseMessage(result.buffer);
-                        if (response.data.ack === FOUR_WAY_ACK.ACK_OK) {
-                            resolve(response.data);
-                            break;
-                        }
-                        this.logError(`  error: ${enumToString(response.data.ack, FOUR_WAY_ACK)} (try ${currentTry}/${retries}, ${elapsed}ms, ${result.length}B)`);
-                    } catch (e: any) {
-                        console.error(e);
-                        this.logError(`  parse failed: ${e.message} (try ${currentTry}/${retries}, ${elapsed}ms, ${result.length}B)`);
+        // The FC stops answering the moment it leaves passthrough, so exit is
+        // fire-and-forget: one attempt, reply ignored.
+        if (command === FOUR_WAY_COMMANDS.cmd_InterfaceExit) {
+            await Serial.request(message, {
+                probe: isCompleteFourWayFrame,
+                timeout,
+                retries: 1,
+                label
+            }).catch(() => null);
+            return null;
+        }
+
+        let parsed: FourWayResponse | null = null;
+
+        try {
+            await Serial.request(message, {
+                probe: isCompleteFourWayFrame,
+                timeout,
+                retries: options.retries ?? FOUR_WAY_DEFAULT_RETRIES,
+                label,
+                validate: (response) => {
+                    const decoded = this.parseMessage(response);
+                    if (decoded.ack !== FOUR_WAY_ACK.ACK_OK) {
+                        throw new Error(`${label}: ${enumToString(decoded.ack, FOUR_WAY_ACK)}`);
                     }
-                } else {
-                    this.logError(`  empty/timeout response (try ${currentTry}/${retries}, ${elapsed}ms, timeout=${timeout}ms)`);
+                    parsed = decoded;
                 }
-                await Serial.drain();
-                await delay(FOUR_WAY_RETRY_DELAY_MS);
-            }
+            });
+        } catch (e: any) {
+            this.logError(`${label} failed: ${e.message}`);
+            throw e;
+        }
 
-            if (currentTry > retries) {
-                reject(new Error('max retries reached'));
-                this.logError(`max retries reached for ${enumToString(command, FOUR_WAY_COMMANDS)}`);
-            }
-        };
-        return new Promise(callback) as Promise<FourWayResponse | null>;
+        return parsed;
     }
 
-    parseMessage (buffer: ArrayBufferLike) {
+    parseMessage (buffer: Uint8Array | ArrayBufferLike) {
         try {
-            const message = parseFourWayResponse(new Uint8Array(buffer));
-            return {
-                commandName: message.command,
-                data: message
-            };
+            return parseFourWayResponse(buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer));
         } catch (e: any) {
             if (e.reason === 'checksum') {
                 this.logError(e.message);
             }
             throw e;
         }
+    }
+
+    /** Timeouts derived from the FC in the path, not from a literal. */
+    private policy () {
+        return Serial.policy.withVariant(fcVariantFromMspType(useSerialStore().mspData.type));
     }
 
     writeAddress (address: number, data: Uint8Array) {
@@ -276,8 +307,13 @@ export class FourWay {
  * @param {Array<number>} data
  * @returns {Promise<Response>}
  */
-    write (address: number, data: number[] | Uint8Array, timeout = FOUR_WAY_DEFAULT_TIMEOUT_MS) {
-        return this.sendWithPromise(FOUR_WAY_COMMANDS.cmd_DeviceWrite, Array.from(data), address, FOUR_WAY_DEFAULT_RETRIES, timeout);
+    write (address: number, data: number[] | Uint8Array) {
+        return this.sendWithPromise(
+            FOUR_WAY_COMMANDS.cmd_DeviceWrite,
+            Array.from(data),
+            address,
+            { payloadBytes: data.length }
+        );
     }
 
     /**
@@ -288,7 +324,12 @@ export class FourWay {
    * @returns {Promise<Response>}
    */
     writeEEprom (address: number, data: number[]) {
-        return this.sendWithPromise(FOUR_WAY_COMMANDS.cmd_DeviceWriteEEprom, data, address);
+        return this.sendWithPromise(
+            FOUR_WAY_COMMANDS.cmd_DeviceWriteEEprom,
+            data,
+            address,
+            { payloadBytes: data.length }
+        );
     }
 
     /**
@@ -299,7 +340,7 @@ export class FourWay {
    * @param {number} pageSize
    * @param {Uint8Array} data
    */
-    async writePages (begin: number, end: number, pageSize: number, data: Uint8Array, timeout: number) {
+    async writePages (begin: number, end: number, pageSize: number, data: Uint8Array) {
         const beginAddress = begin * pageSize;
         const endAddress = end * pageSize;
         const step = 0x100;
@@ -308,8 +349,7 @@ export class FourWay {
         for (let address = beginAddress; address < endAddress && address < data.length; address += step) {
             await this.write(
                 address,
-                data.subarray(address, Math.min(address + step, data.length)),
-                timeout
+                data.subarray(address, Math.min(address + step, data.length))
             );
 
             escStore.bytesWritten += step;
@@ -357,7 +397,11 @@ export class FourWay {
         throw new Error('EscInitError');
     }
 
-    async writeHex (target: number, hex: string, timeout: number) { // }, force: boolean, migrate: boolean) {
+    /**
+     * No timeout parameter, deliberately: audit item C was `writeHex(i, hex, 200)`
+     * reaching a page write the FC budgets ~700 ms for. The policy derives it.
+     */
+    async writeHex (target: number, hex: string) { // }, force: boolean, migrate: boolean) {
         const escStore = useEscStore();
         const parsed = parseHex(hex);
         if (parsed) {
@@ -386,9 +430,9 @@ export class FourWay {
                     originalSettings.fill(0x00, 3, 5);
                     originalSettings.set(asciiToBuffer('FLASH FAIL  '), 5);
                     */
-                    await this.write(eepromOffset, originalSettings, timeout);
+                    await this.write(eepromOffset, originalSettings);
 
-                    await this.writePages(0x04, 0x40, pageSize, flash, timeout);
+                    await this.writePages(0x04, 0x40, pageSize, flash);
                     /* try {
                         escStore.step = 'Verifying';
                         await delay(200);
@@ -431,7 +475,7 @@ export class FourWay {
         const escStore = useEscStore();
 
         for (let address = beginAddress; address < endAddress && address < data.length; address += step) {
-            const message = await this.readAddress(address, Math.min(step, data.length - address), FOUR_WAY_DEFAULT_RETRIES, FOUR_WAY_READ_TIMEOUT_MS);
+            const message = await this.readAddress(address, Math.min(step, data.length - address));
             if (message) {
                 const reference = data.subarray(message.address, message.address + message.params.byteLength);
 

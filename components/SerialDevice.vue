@@ -520,44 +520,23 @@ const connectToDevice = async () => {
         if (!serialStore.deviceHandles.port) {
             logError('Serial port not found');
         } else {
-            if (!serialStore.deviceHandles.port.readable) {
-                try {
-                    await serialStore.deviceHandles.serial.openPort(
-                        serialStore.deviceHandles.port, {
-                            baudRate: +baudrate.value
-                        } as {
-                          baudRate?: number;
-                          stopBits?: 1 | 2;
-                          parity?: 'none';
-                          'even': any;
-                          'odd': any;
-                          bufferSize?: number;
-                          flowControl?: 'none' | 'hardware';
-                          onconnect?: (ev: any) => void;
-                          ondisconnect?: (ev: any) => void;
-                      }
-                    );
-                } catch (e: any) {
-                    logError('Port already in use!');
-                    toast.add({
-                        icon: 'i-material-symbols-mimo-disconnect-outline',
-                        title: 'Error',
-                        color: 'red',
-                        description: 'Port already in use, please free device and try again!'
-                    });
-                    throw new Error(`${e.message}`);
-                }
+            try {
+                // Opens the port and stands up the link layer over am32-web's
+                // WebSerialTransport. It owns the reader and the writer for the
+                // whole session -- see packages/am32-web.
+                await Serial.init(log, logError, logWarning, serialStore.deviceHandles.port, +baudrate.value);
+            } catch (e: any) {
+                logError(`Could not open serial port: ${e.message}`);
+                toast.add({
+                    icon: 'i-material-symbols-mimo-disconnect-outline',
+                    title: 'Error',
+                    color: 'red',
+                    description: 'Port already in use, please free device and try again!'
+                });
+                throw new Error(`${e.message}`);
             }
 
-            if (serialStore.deviceHandles.port.readable && serialStore.deviceHandles.port.writable) {
-                /* if (!serialStore.deviceHandles.reader) {
-                    serialStore.deviceHandles.reader = await serialStore.deviceHandles.port.readable.getReader();
-                }
-                if (!serialStore.deviceHandles.writer) {
-                    serialStore.deviceHandles.writer = await serialStore.deviceHandles.port.writable.getWriter();
-                } */
-                Serial.init(log, logError, logWarning, serialStore.deviceHandles.serial, serialStore.deviceHandles.port);
-
+            if (Serial.isOpen) {
                 log('Connected to device');
 
                 // ArduPilot only hands the USB/MAVLink port to MSP/BLHeli after
@@ -754,20 +733,10 @@ const disconnectFromDevice = async () => {
             await FourWay.getInstance().send(FOUR_WAY_COMMANDS.cmd_InterfaceExit);
         }
 
-        Serial.deinit();
-
-        /*
-        console.log(serialStore.deviceHandles);
-        serialStore.deviceHandles.reader?.releaseLock();
-        serialStore.deviceHandles.writer?.releaseLock();
-        await serialStore.deviceHandles.port.close();
-        */
-
-        if (serialStore.deviceHandles.stream) {
-            serialStore.deviceHandles.stream.reader?.releaseLock();
-            serialStore.deviceHandles.stream.writer?.releaseLock();
-            serialStore.deviceHandles.stream.port.close();
-        }
+        // Stops the read loop, releases the reader and writer locks and closes
+        // the port -- in that order, and it waits for the loop to actually exit.
+        // The old path closed the port and left the loop spinning (audit E).
+        await Serial.deinit();
 
         serialStore.$reset();
 
@@ -865,7 +834,10 @@ const startFlash = async (hexString: string) => {
     for (const n of savingOrApplyingSelectedEscs.value) {
         const i = n - 1;
         escStore.activeTarget = i;
-        await FourWay.getInstance().writeHex(i, hexString, 200);
+        // No timeout argument any more: the core's TimeoutPolicy derives one per
+        // page write from the FC's own budget. This call site passing 200 ms was
+        // audit item C.
+        await FourWay.getInstance().writeHex(i, hexString);
         await delay(200);
         escStore.step = 'Resetting';
         await FourWay.getInstance().reset(i);

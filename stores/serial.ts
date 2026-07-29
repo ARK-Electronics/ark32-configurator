@@ -1,5 +1,4 @@
 import { defineStore, acceptHMRUpdate } from 'pinia';
-import { WebSerial, type StreamInfo } from 'webserial-wrapper';
 import type { Msp } from '~/src/communication/msp';
 import type { FourWay } from '~/src/communication/four_way';
 
@@ -15,22 +14,22 @@ export const useSerialStore = defineStore('serial', () => {
         id: '-1',
         label: 'Select device'
     });
+    // The port is the only handle the store still needs: block 2 moved the
+    // stream, the reader and the writer into am32-web's WebSerialTransport,
+    // which owns them for the lifetime of the connection. `reader`, `writer`,
+    // `msp` and `fourWay` are unused already -- audit item I, block 5.
     const deviceHandles = ref<{
         port: SerialPort | null,
-        serial: WebSerial,
         reader: ReadableStreamDefaultReader | null,
         writer: WritableStreamDefaultWriter | null,
         msp: Msp | null,
-        fourWay: FourWay | null,
-        stream: StreamInfo | null
+        fourWay: FourWay | null
     }>({
         port: null,
-        serial: new WebSerial(),
         reader: null,
         writer: null,
         msp: null,
-        fourWay: null,
-        stream: null
+        fourWay: null
     });
 
     const mspData = ref<MspData>({} as MspData);
@@ -59,12 +58,10 @@ export const useSerialStore = defineStore('serial', () => {
         isFourWay.value = false;
         deviceHandles.value = {
             port: null,
-            serial: deviceHandles.value.serial,
             reader: null,
             writer: null,
             msp: null,
-            fourWay: null,
-            stream: null
+            fourWay: null
         };
         mspData.value = {} as MspData;
     }

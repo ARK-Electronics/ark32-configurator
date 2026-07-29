@@ -1,3 +1,9 @@
+// Web Serial globals (`navigator.serial`, `SerialPort`). These used to arrive
+// as a side effect of importing `webserial-wrapper`, which depended on
+// @types/dom-serial; block 2 deleted that package, so the reference has to be
+// explicit. @types/dom-serial is now a direct devDependency.
+/// <reference types="dom-serial" />
+
 type LogMessageType = undefined | null | 'warning' | 'error'
 type LogMessage = [Date, string, LogMessageType]
 type LogFn = (s: string) => void;

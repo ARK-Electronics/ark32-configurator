@@ -56,7 +56,15 @@ export class Msp {
         const frame = encodeMspCommand(command, data ?? new Uint8Array());
 
         try {
-            return await Serial.write(frame.buffer as ArrayBuffer, undefined, isCompleteMspFrame);
+            // The timeout comes from the policy, which knows MSP_SET_PASSTHROUGH
+            // is the slow one: ArduPilot replies to it only after
+            // serial_setup_output, and declares up to 1000 ms for that.
+            return await Serial.request(frame, {
+                probe: isCompleteMspFrame,
+                timeout: Serial.policy.forMsp(command),
+                retries: 1,
+                label: enumToString(command, MSP_COMMANDS)
+            });
         } catch (e: any) {
             this.logError(`MSP command failed: ${e.message}`);
             return null;

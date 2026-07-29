@@ -32,6 +32,14 @@ jobs:
       - name: Install
         run: yarn install --immutable
 
+      # The root tsconfig extends ./.nuxt/tsconfig.json, which does not exist in
+      # a fresh checkout. Without this, eslint's TypeScript resolver and
+      # `prisma generate` both fail on a file-not-found rather than on anything
+      # real. `yarn verify` and `yarn build` run it themselves; it is a separate
+      # step here so a failure is legible in the job log.
+      - name: Prepare Nuxt
+        run: yarn nuxt prepare
+
       # Split out from `yarn verify` so a failure names the stage in the job log
       # instead of collapsing into one red step.
       - name: Lint

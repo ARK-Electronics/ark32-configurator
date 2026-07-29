@@ -9,7 +9,7 @@
     "packages/*"
   ],
   "scripts": {
-    "verify": "yarn lint && yarn typecheck && yarn test",
+    "verify": "nuxt prepare && yarn lint && yarn typecheck && yarn test",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "yarn typecheck:core && yarn typecheck:app",

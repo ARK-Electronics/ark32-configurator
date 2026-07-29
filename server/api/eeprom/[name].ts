@@ -1,4 +1,4 @@
-import { useMinio } from '~/composables/useMinio';
+import { isMinioConfigured, useMinio } from '~/composables/useMinio';
 
 const getVersion = (version: number) => {
     if (version > 3) {
@@ -10,6 +10,14 @@ const getVersion = (version: number) => {
 export default defineEventHandler(async (event) => {
     const version = Number(getQuery(event).version?.toString() ?? '2');
     const name = getRouterParam(event, 'name');
+
+    if (!isMinioConfigured()) {
+        throw createError({
+            statusCode: 404,
+            statusMessage: 'binaries not available without object storage'
+        });
+    }
+
     const minioClient = useMinio();
 
     const binariesCache = useStorage('binaries');

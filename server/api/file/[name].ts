@@ -1,5 +1,5 @@
 import { basename, extname } from 'path';
-import { useMinio } from '~/composables/useMinio';
+import { isMinioConfigured, useMinio } from '~/composables/useMinio';
 
 const MIME_TYPES: Record<string, string> = {
     '.hex': 'application/octet-stream',
@@ -53,6 +53,13 @@ export default defineEventHandler(async (event) => {
         });
     }
 
+    if (!isMinioConfigured()) {
+        throw createError({
+            statusCode: 503,
+            statusMessage: 'object storage not configured'
+        });
+    }
+
     const minioClient = useMinio();
 
     try {
@@ -73,3 +80,4 @@ export default defineEventHandler(async (event) => {
         });
     }
 });
+

@@ -1,5 +1,9 @@
 import { promiseTimeout } from '@vueuse/core';
-import { useMinio } from '~/composables/useMinio';
+import { isMinioConfigured, useMinio } from '~/composables/useMinio';
+import {
+    GITHUB_FILE_SOURCES,
+    getGithubReleaseFolder
+} from '~/server/utils/github-files';
 
 type CachedObject = {
     key: string,
@@ -58,7 +62,11 @@ async function getCachedObjects (
 ): Promise<CachedObject[]> {
     const stream = minioClient.listObjectsV2(bucketName, '', true, '');
 
-    return await new Promise((resolve) => {
+    return await new Promise((resolve, reject) => {
+        stream.on('error', (err) => {
+            reject(err);
+        });
+
         stream.on('data', async (obj) => {
             if (obj.name && !(await cache.hasItem(`${cacheNamespace}:${obj.name}`))) {
                 const url = await minioClient.presignedUrl('get', bucketName, obj.name, 24 * 60 * 60);
@@ -104,7 +112,13 @@ function buildNestedFolder (
 
     for (const entry of entries) {
         const objectPath = getObjectPath(cacheNamespace, entry.key);
-        const [fileOrVersion, ...subParts] = objectPath.split(':').filter(Boolean);
+        // Support both "v1.0/file.hex" (MinIO paths) and "v1.0:file.hex" keys
+        const parts = objectPath.includes('/')
+            ? objectPath.split('/').filter(Boolean)
+            : objectPath.split(':').filter(Boolean);
+
+        const fileOrVersion = parts[0];
+        const subParts = parts.slice(1);
 
         if (!fileOrVersion) {
             continue;
@@ -127,7 +141,7 @@ function buildNestedFolder (
             }
 
             subfolder.files.push({
-                ...buildFileEntry(subParts.join('/'), entry.value ?? '', bucketName, objectPath)
+                ...buildFileEntry(subParts.join('/'), entry.value ?? '', bucketName, objectPath.replace(/:/g, '/'))
             });
         } else {
             folder.files.push(buildFileEntry(fileOrVersion, entry.value ?? '', bucketName, objectPath));
@@ -145,13 +159,38 @@ function buildFlatFolder (folderName: string, entries: CachedObject[], bucketNam
             const objectPath = getObjectPath(cacheNamespace, entry.key);
 
             return buildFileEntry(
-                objectPath.split(':').pop() ?? objectPath,
+                objectPath.split(/[/:]/).pop() ?? objectPath,
                 entry.value ?? '',
                 bucketName,
                 objectPath
             );
         })
     };
+}
+
+function emptyFolder (name: string): BlobFolder {
+    return { name, children: [], files: [] };
+}
+
+async function getSectionFromGithub (
+    filterName: string,
+    includePrereleases: boolean
+): Promise<BlobFolder | null> {
+    if (filterName === 'releases') {
+        const src = GITHUB_FILE_SOURCES.releases;
+        return await getGithubReleaseFolder({
+            ...src,
+            includePrereleases
+        });
+    }
+    if (filterName === 'bootloader') {
+        const src = GITHUB_FILE_SOURCES.bootloader;
+        return await getGithubReleaseFolder({
+            ...src,
+            includePrereleases: true
+        });
+    }
+    return null;
 }
 
 export default defineEventHandler(async (event) => {
@@ -203,26 +242,65 @@ export default defineEventHandler(async (event) => {
         }
     ];
 
-    const minioClient = useMinio();
+    const useMinioBackend = isMinioConfigured();
+    const minioClient = useMinioBackend ? useMinio() : null;
     const folders: BlobFolder[] = [];
+
+    if (!useMinioBackend) {
+        console.info('[api/files] MinIO not configured — using GitHub Releases for firmware/bootloader');
+    }
 
     for (const section of sectionConfigs) {
         if (!filter.includes(section.filterName)) {
             continue;
         }
 
-        const cache = useStorage(section.storageName);
-        const entries = await getCachedObjects(minioClient, cache, section.bucketName, section.cacheNamespace);
+        try {
+            if (!useMinioBackend || !minioClient) {
+                const githubFolder = await getSectionFromGithub(
+                    section.filterName,
+                    section.includePrereleaseFilter ? includePrereleases : true
+                );
+                folders.push(githubFolder ?? emptyFolder(section.folderName));
+                continue;
+            }
 
-        folders.push(section.nested
-            ? buildNestedFolder(
-                section.folderName,
-                entries,
+            const cache = useStorage(section.storageName);
+            const entries = await getCachedObjects(
+                minioClient,
+                cache,
                 section.bucketName,
-                section.cacheNamespace,
-                section.includePrereleaseFilter ? includePrereleases : true
-            )
-            : buildFlatFolder(section.folderName, entries, section.bucketName, section.cacheNamespace));
+                section.cacheNamespace
+            );
+
+            folders.push(section.nested
+                ? buildNestedFolder(
+                    section.folderName,
+                    entries,
+                    section.bucketName,
+                    section.cacheNamespace,
+                    section.includePrereleaseFilter ? includePrereleases : true
+                )
+                : buildFlatFolder(section.folderName, entries, section.bucketName, section.cacheNamespace));
+        } catch (err) {
+            console.error(`[api/files] failed for ${section.filterName}:`, err);
+
+            // Fall back to GitHub for firmware sections if MinIO fails
+            try {
+                const githubFolder = await getSectionFromGithub(
+                    section.filterName,
+                    section.includePrereleaseFilter ? includePrereleases : true
+                );
+                if (githubFolder) {
+                    folders.push(githubFolder);
+                    continue;
+                }
+            } catch (ghErr) {
+                console.error(`[api/files] GitHub fallback failed for ${section.filterName}:`, ghErr);
+            }
+
+            folders.push(emptyFolder(section.folderName));
+        }
     }
 
     return {

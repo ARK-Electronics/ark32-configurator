@@ -1,6 +1,13 @@
-import { useMinio } from '~/composables/useMinio';
+import { isMinioConfigured, useMinio } from '~/composables/useMinio';
 
 export default defineEventHandler(async () => {
+    if (!isMinioConfigured()) {
+        throw createError({
+            statusCode: 404,
+            statusMessage: 'schema not found'
+        });
+    }
+
     const minioClient = useMinio();
 
     const binariesCache = useStorage('schema');

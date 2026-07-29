@@ -1,0 +1,87 @@
+{
+    "plan": "https://github.com/ARK-Electronics/ark32-configurator/issues/3",
+    "auditBaseCommit": "4094dad",
+    "rule": "One block per session. Do not start the next block.",
+    "blocks": [
+        {
+            "id": "0",
+            "title": "Local dev unblock",
+            "status": "done",
+            "doneWhen": "./run.sh starts the dev server with no MariaDB, MinIO or Redis running",
+            "landedIn": "master (4094dad, fast-forwarded from fix/passthrough-enumeration-reliability)",
+            "notes": "Also carries PR #1's serial hardening (077b260, 6396b2e). Blocks 2 and 4 replace that work properly; leave it in place until they do."
+        },
+        {
+            "id": "0.5",
+            "title": "Verification harness",
+            "status": "done",
+            "doneWhen": "yarn verify exits 0; CI runs it on push and PR",
+            "landedIn": "chore/verification-harness",
+            "notes": "vitest + fast-check, packages/am32-core skeleton with DOM/Node-free tsconfig, lint baseline to 0 errors, CLAUDE.md, this file, /block skill."
+        },
+        {
+            "id": "1a",
+            "title": "Delete removed features",
+            "status": "todo",
+            "doneWhen": "yarn verify && scripts/assert-deleted.sh",
+            "notes": "Bootloader flashing (.amj tab, AmjType), USB-direct mode (src/communication/direct.ts and its guards), bootloader downloads. Mechanical, no protocol work."
+        },
+        {
+            "id": "1b",
+            "title": "Protocol core extraction",
+            "status": "todo",
+            "doneWhen": "yarn verify",
+            "notes": "packages/am32-core: eeprom layout + byte-preserving codec (EEPROM_SIZE 192, CAN_SETTINGS as Uint8Array), MSP v1/v2 framing with error frames and echo check, 4-way framing, Mcu, hex. Fixes audit A (codec half) and D."
+        },
+        {
+            "id": "2",
+            "title": "Link and transports",
+            "status": "todo",
+            "doneWhen": "yarn verify",
+            "notes": "Transport, Link, injectable Clock, drain semantics, retry, TimeoutPolicy. packages/am32-web replaces webserial-wrapper. Fixes E, G (hang + double drain), C."
+        },
+        {
+            "id": "3",
+            "title": "Simulated FC and ESCs",
+            "status": "todo",
+            "doneWhen": "yarn verify",
+            "notes": "packages/am32-sim: SimEsc, SimFc (ArduPilot + Betaflight profiles), SimTransport, every fault knob, virtual clock."
+        },
+        {
+            "id": "4",
+            "title": "Session API",
+            "status": "todo",
+            "doneWhen": "yarn verify",
+            "notes": "Am32Session + FC quirk modules. ArduPilot probe-then-wait, Betaflight fast path. Fixes B and H. Hardware checkpoint after this block."
+        },
+        {
+            "id": "5",
+            "title": "UI as a thin client",
+            "status": "todo",
+            "doneWhen": "yarn verify",
+            "notes": "SerialDevice.vue shrinks to UI + store mirroring. Deletes src/communication/*, commands.queue.ts, dead store fields (I), the queue dependency. no-restricted-imports rule active."
+        },
+        {
+            "id": "6",
+            "title": "Verified settings write and flash",
+            "status": "todo",
+            "doneWhen": "yarn verify",
+            "notes": "writeSettings with read-back verification, flash() with page handling, applyDefaults. Completes A and C. Drops the bootloader-version auto-write in getInfo. Hardware checkpoint after this block."
+        },
+        {
+            "id": "7",
+            "title": "Headless CLI",
+            "status": "todo",
+            "doneWhen": "yarn verify && CLI smoke against --sim",
+            "notes": "packages/am32-node + packages/am32-cli including --sim. Packaging per issue #3 section 6."
+        },
+        {
+            "id": "8",
+            "title": "ARK32 firmware catalog",
+            "status": "blocked",
+            "blockedBy": "ARK-Electronics/ARK32#67",
+            "doneWhen": "A deploy with no MinIO shows the ARK32 release list and flashing from the catalog works end to end",
+            "notes": "Out of the sequential path. Do not attempt until ARK32#67 lands; there are no releases or tags to fetch."
+        }
+    ]
+}

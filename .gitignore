@@ -5,6 +5,7 @@
 .nitro
 .cache
 dist
+coverage
 public/uploads
 
 # Node dependencies

@@ -1,0 +1,30 @@
+{
+    // Deliberately standalone: this does NOT extend the generated Nuxt tsconfig.
+    //
+    // `lib` omits "dom" and `types` is empty, so `navigator.serial`, `window`,
+    // `Buffer`, `process` and `fs` are all compile errors inside this package.
+    // That is the enforcement behind section 7.1 of the overhaul plan: protocol
+    // logic physically cannot depend on a browser or on Node, so it has nowhere
+    // to live except here, and the web/node/sim transports stay interchangeable.
+    //
+    // If you find yourself wanting to add "dom" here, the code you are writing
+    // belongs in packages/am32-web, not in the core.
+    "compilerOptions": {
+        "target": "ES2022",
+        "module": "ES2022",
+        "moduleResolution": "bundler",
+        "lib": ["ES2022"],
+        "types": [],
+        "strict": true,
+        "noUncheckedIndexedAccess": true,
+        "noImplicitOverride": true,
+        "noEmit": true,
+        "isolatedModules": true,
+        "verbatimModuleSyntax": true,
+        "skipLibCheck": true
+    },
+    // Tests import vitest, which needs types this config deliberately withholds.
+    // They are typechecked by the root `yarn typecheck` instead.
+    "include": ["src/**/*.ts"],
+    "exclude": ["src/**/*.test.ts"]
+}

@@ -66,11 +66,10 @@ export default async function (minTag?: string) {
         owner: 'am32-firmware',
         repo: 'AM32-bootloader'
     });
-    
+
     const bootloaderData = await bootloader.data;
 
     console.log(`got ${bootloaderData.length} bootloader releases`);
-
 
     const bootloaderStream = minioClient.listObjectsV2('bootloaders', '', true, '');
 
@@ -87,7 +86,6 @@ export default async function (minTag?: string) {
             uploadedBootloaders[release].push(asset);
         }
     });
-
 
     await finished(bootloaderStream);
 

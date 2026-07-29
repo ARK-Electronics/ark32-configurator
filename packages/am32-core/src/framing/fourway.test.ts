@@ -9,7 +9,10 @@ import {
     crc16Xmodem,
     crc16XmodemUpdate,
     encodeFourWayRequest,
+    encodeFourWayResponse,
     isCompleteFourWayFrame,
+    isCompleteFourWayRequest,
+    parseFourWayRequest,
     parseFourWayResponse
 } from './fourway';
 
@@ -255,5 +258,114 @@ describe('the ACK enum', () => {
         expect(FOUR_WAY_COMMANDS.cmd_DeviceRead).toBe(0x3A);
         expect(FOUR_WAY_COMMANDS.cmd_DeviceWrite).toBe(0x3B);
         expect(FOUR_WAY_COMMANDS.cmd_DeviceVerify).toBe(0x40);
+    });
+});
+
+/**
+ * The FC's half of the framing, added in block 3 so `am32-sim` acts as a flight
+ * controller through the same code the host parses with, rather than through a
+ * second implementation that could agree only with itself.
+ */
+describe('the FC side: encodeFourWayResponse', () => {
+    it('round-trips through parseFourWayResponse with the ACK and address intact', () => {
+        const frame = encodeFourWayResponse(
+            FOUR_WAY_COMMANDS.cmd_DeviceInitFlash,
+            [0x06, 0x1F, 0x32, 0x04],
+            FOUR_WAY_ACK.ACK_OK,
+            0x7C00
+        );
+
+        expect(frame[0]).toBe(FOUR_WAY_REMOTE_ESCAPE);
+        expect(frame).toHaveLength(4 + 8);
+        expect(isCompleteFourWayFrame(frame)).toBe(true);
+
+        const parsed = parseFourWayResponse(frame);
+        expect(parsed.command).toBe(FOUR_WAY_COMMANDS.cmd_DeviceInitFlash);
+        expect(parsed.address).toBe(0x7C00);
+        expect(parsed.ack).toBe(FOUR_WAY_ACK.ACK_OK);
+        expect(Array.from(parsed.params)).toEqual([0x06, 0x1F, 0x32, 0x04]);
+    });
+
+    it('covers the ACK byte with the checksum but not the checksum itself', () => {
+        const frame = encodeFourWayResponse(FOUR_WAY_COMMANDS.cmd_DeviceRead, [1, 2], FOUR_WAY_ACK.ACK_OK);
+        const expected = crc16Xmodem(frame, 0, frame.length - 2);
+        expect((frame[frame.length - 2] as number) << 8 | (frame[frame.length - 1] as number)).toBe(expected);
+
+        // Flipping the ACK must invalidate the frame, or a non-OK reply could be
+        // forged by a single-bit error on the wire.
+        const tampered = frame.slice();
+        tampered[tampered.length - 3] = FOUR_WAY_ACK.ACK_D_GENERAL_ERROR;
+        expect(() => parseFourWayResponse(tampered)).toThrow(FourWayFrameError);
+    });
+
+    it('encodes 256 params as a length byte of zero, matching the request encoder', () => {
+        const params = new Array(FOUR_WAY_MAX_PARAMS).fill(0xAB);
+        const frame = encodeFourWayResponse(FOUR_WAY_COMMANDS.cmd_DeviceRead, params);
+
+        expect(frame[4]).toBe(0);
+        expect(frame).toHaveLength(FOUR_WAY_MAX_PARAMS + 8);
+        expect(parseFourWayResponse(frame).params).toHaveLength(FOUR_WAY_MAX_PARAMS);
+    });
+
+    it('rejects more params than a frame can carry', () => {
+        expect(() => encodeFourWayResponse(
+            FOUR_WAY_COMMANDS.cmd_DeviceRead,
+            new Array(FOUR_WAY_MAX_PARAMS + 1).fill(0)
+        )).toThrow(FourWayFrameError);
+    });
+});
+
+describe('the FC side: parseFourWayRequest', () => {
+    it('parses what encodeFourWayRequest produced', () => {
+        const frame = encodeFourWayRequest(FOUR_WAY_COMMANDS.cmd_DeviceWrite, [9, 8, 7], 0x1234);
+
+        expect(isCompleteFourWayRequest(frame)).toBe(true);
+        const parsed = parseFourWayRequest(frame);
+        expect(parsed.command).toBe(FOUR_WAY_COMMANDS.cmd_DeviceWrite);
+        expect(parsed.address).toBe(0x1234);
+        expect(Array.from(parsed.params)).toEqual([9, 8, 7]);
+    });
+
+    it('needs one byte fewer than a response, because there is no ACK', () => {
+        const frame = encodeFourWayRequest(FOUR_WAY_COMMANDS.cmd_InterfaceTestAlive, [0], 0);
+        expect(frame).toHaveLength(8);
+        expect(frame[0]).toBe(FOUR_WAY_LOCAL_ESCAPE);
+
+        expect(isCompleteFourWayRequest(frame.slice(0, 7))).toBe(false);
+        expect(isCompleteFourWayRequest(frame)).toBe(true);
+    });
+
+    it('reads a length byte of zero as 256 params', () => {
+        const frame = encodeFourWayRequest(
+            FOUR_WAY_COMMANDS.cmd_DeviceWrite,
+            new Array(FOUR_WAY_MAX_PARAMS).fill(0x5A),
+            0x2000
+        );
+
+        expect(frame[4]).toBe(0);
+        expect(isCompleteFourWayRequest(frame.slice(0, frame.length - 1))).toBe(false);
+        expect(parseFourWayRequest(frame).params).toHaveLength(FOUR_WAY_MAX_PARAMS);
+    });
+
+    it('rejects a bad start byte, a truncated frame and a bad checksum', () => {
+        const frame = encodeFourWayRequest(FOUR_WAY_COMMANDS.cmd_DeviceRead, [192], 0x7C00);
+
+        const wrongStart = frame.slice();
+        wrongStart[0] = FOUR_WAY_REMOTE_ESCAPE;
+        expect(() => parseFourWayRequest(wrongStart)).toThrow(/invalid message start/);
+
+        expect(() => parseFourWayRequest(frame.slice(0, 5))).toThrow(/NotEnoughDataError/);
+
+        const badCrc = frame.slice();
+        badCrc[badCrc.length - 1] = (badCrc[badCrc.length - 1] as number) ^ 0xFF;
+        expect(() => parseFourWayRequest(badCrc)).toThrow(/checksum mismatch/);
+    });
+
+    it('refuses to see a request in a response, and vice versa', () => {
+        const request = encodeFourWayRequest(FOUR_WAY_COMMANDS.cmd_DeviceRead, [192], 0x7C00);
+        const response = encodeFourWayResponse(FOUR_WAY_COMMANDS.cmd_DeviceRead, [1], FOUR_WAY_ACK.ACK_OK);
+
+        expect(isCompleteFourWayRequest(response)).toBe(false);
+        expect(isCompleteFourWayFrame(request)).toBe(false);
     });
 });

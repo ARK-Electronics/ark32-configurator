@@ -38,6 +38,7 @@ export {
     encodeMspV2,
     isCompleteMspFrame,
     isMspRequest,
+    mspFrameLength,
     parseMspResponse
 } from './framing/msp';
 export type {
@@ -54,15 +55,19 @@ export {
     FOUR_WAY_LOCAL_ESCAPE,
     FOUR_WAY_MAX_PARAMS,
     FOUR_WAY_REMOTE_ESCAPE,
+    FOUR_WAY_REQUEST_OVERHEAD,
     FOUR_WAY_RESPONSE_OVERHEAD,
     FourWayFrameError,
     crc16Xmodem,
     crc16XmodemUpdate,
     encodeFourWayRequest,
+    encodeFourWayResponse,
     isCompleteFourWayFrame,
+    isCompleteFourWayRequest,
+    parseFourWayRequest,
     parseFourWayResponse
 } from './framing/fourway';
-export type { FourWayFrameErrorReason, FourWayResponse } from './framing/fourway';
+export type { FourWayFrameErrorReason, FourWayRequest, FourWayResponse } from './framing/fourway';
 
 export { Mcu, createMcuInfo } from './mcu';
 export type { EscData, McuInfo, McuVariant } from './mcu';

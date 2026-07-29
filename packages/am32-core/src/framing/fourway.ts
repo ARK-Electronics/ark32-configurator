@@ -73,6 +73,18 @@ export interface FourWayResponse {
     params: Uint8Array;
 }
 
+/**
+ * A host -> FC request, as the flight controller parses it. The host never
+ * needs this; `am32-sim`'s `SimFc` does, and it lives here so there is exactly
+ * one implementation of 4-way framing in the tree rather than one per side.
+ */
+export interface FourWayRequest {
+    command: number;
+    address: number;
+    checksum: number;
+    params: Uint8Array;
+}
+
 export type FourWayFrameErrorReason =
     | 'start'
     | 'truncated'
@@ -146,6 +158,47 @@ export function encodeFourWayRequest (
 }
 
 /**
+ * Build an FC -> host response frame.
+ *
+ * The mirror of {@link encodeFourWayRequest}, with the ACK byte inserted before
+ * the checksum. The checksum covers everything up to and including the ACK
+ * (ArduPilot `AP_BLHeli.cpp:620`, Betaflight `serial_4way.c:901-918`).
+ *
+ * Note the length byte is always the *reply's* param count, never the request's,
+ * and 256 is encoded as 0 in both directions.
+ */
+export function encodeFourWayResponse (
+    command: FOUR_WAY_COMMANDS | number,
+    params: ArrayLike<number> = [0],
+    ack: FOUR_WAY_ACK | number = FOUR_WAY_ACK.ACK_OK,
+    address = 0
+): Uint8Array {
+    const payload = params.length === 0 ? [0] : params;
+
+    if (payload.length > FOUR_WAY_MAX_PARAMS) {
+        throw new FourWayFrameError('params', `too many parameters: ${payload.length} (max ${FOUR_WAY_MAX_PARAMS})`);
+    }
+
+    const frame = new Uint8Array(FOUR_WAY_RESPONSE_OVERHEAD + payload.length);
+    frame[0] = FOUR_WAY_REMOTE_ESCAPE;
+    frame[1] = command;
+    frame[2] = (address >> 8) & 0xFF;
+    frame[3] = address & 0xFF;
+    frame[4] = payload.length === FOUR_WAY_MAX_PARAMS ? 0 : payload.length;
+
+    for (let i = 0; i < payload.length; i += 1) {
+        frame[5 + i] = (payload[i] as number) & 0xFF;
+    }
+    frame[5 + payload.length] = ack & 0xFF;
+
+    const checksum = crc16Xmodem(frame, 0, 6 + payload.length);
+    frame[6 + payload.length] = (checksum >> 8) & 0xFF;
+    frame[7 + payload.length] = checksum & 0xFF;
+
+    return frame;
+}
+
+/**
  * How many params a response frame claims, or null if the buffer is too short
  * to tell. A count byte of 0 means 256.
  */
@@ -211,4 +264,64 @@ export function parseFourWayResponse (buffer: Uint8Array): FourWayResponse {
     }
 
     return response;
+}
+
+/**
+ * Bytes of a request frame that are not params: start, command, address (2),
+ * param count and the 2 CRC bytes. One fewer than a response, which also
+ * carries an ACK.
+ */
+export const FOUR_WAY_REQUEST_OVERHEAD = 7;
+
+/**
+ * Structural completeness probe for a host -> FC request. The FC's half of
+ * {@link isCompleteFourWayFrame}; says nothing about the checksum.
+ */
+export function isCompleteFourWayRequest (buffer: Uint8Array): boolean {
+    if (buffer.length < FOUR_WAY_REQUEST_OVERHEAD || buffer[0] !== FOUR_WAY_LOCAL_ESCAPE) {
+        return false;
+    }
+    const params = claimedParamCount(buffer);
+    return params !== null && buffer.length >= params + FOUR_WAY_REQUEST_OVERHEAD;
+}
+
+/**
+ * Parse a host -> FC request frame. Throws {@link FourWayFrameError} on a bad
+ * start byte, a truncated frame or a checksum mismatch.
+ *
+ * The two firmwares diverge on what they do with a `checksum` failure --
+ * Betaflight answers `ACK_I_INVALID_CRC` while ArduPilot drops the frame in
+ * silence -- so that decision belongs to the caller, not here.
+ */
+export function parseFourWayRequest (buffer: Uint8Array): FourWayRequest {
+    if (buffer.length === 0 || buffer[0] !== FOUR_WAY_LOCAL_ESCAPE) {
+        throw new FourWayFrameError('start', `invalid message start: ${buffer[0]}`);
+    }
+
+    if (buffer.length < FOUR_WAY_REQUEST_OVERHEAD) {
+        throw new FourWayFrameError('truncated', 'NotEnoughDataError');
+    }
+
+    const paramCount = claimedParamCount(buffer) as number;
+
+    if (buffer.length < paramCount + FOUR_WAY_REQUEST_OVERHEAD) {
+        throw new FourWayFrameError('truncated', 'NotEnoughDataError');
+    }
+
+    const request: FourWayRequest = {
+        command: buffer[1] as number,
+        address: ((buffer[2] as number) << 8) | (buffer[3] as number),
+        checksum: ((buffer[5 + paramCount] as number) << 8) | (buffer[6 + paramCount] as number),
+        params: buffer.slice(5, 5 + paramCount)
+    };
+
+    const checksum = crc16Xmodem(buffer, 0, 5 + paramCount);
+    if (checksum !== request.checksum) {
+        throw new FourWayFrameError(
+            'checksum',
+            `checksum mismatch, received: ${request.checksum}, calculated: ${checksum}`
+        );
+    }
+
+    return request;
 }

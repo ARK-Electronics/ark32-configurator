@@ -209,8 +209,15 @@ export function encodeMspCommand (command: number, data: Uint8Array = new Uint8A
     return command <= MSP_V1_MAX_COMMAND ? encodeMspV1(command, data) : encodeMspV2(command, data);
 }
 
-/** Total frame length implied by a buffer's header, or null if not yet known. */
-function frameLength (buffer: Uint8Array): number | null {
+/**
+ * Total frame length implied by a buffer's header, or null while the header is
+ * still incomplete.
+ *
+ * Exported because a frame *parser* -- `am32-sim`'s `SimFc`, which has to act as
+ * the flight controller -- needs to know how many bytes to consume, and the
+ * alternative is a second implementation of MSP length arithmetic.
+ */
+export function mspFrameLength (buffer: Uint8Array): number | null {
     if (buffer.length < 3) {
         return null;
     }
@@ -247,7 +254,7 @@ export function isCompleteMspFrame (buffer: Uint8Array): boolean {
     if (buffer.length < 3 || buffer[0] !== DOLLAR || directionFromChar(buffer[2] as number) === null) {
         return false;
     }
-    const length = frameLength(buffer);
+    const length = mspFrameLength(buffer);
     return length !== null && buffer.length >= length;
 }
 
@@ -341,7 +348,7 @@ export class MspParser {
                 this.buffer = this.buffer.slice(start);
             }
 
-            const length = frameLength(this.buffer);
+            const length = mspFrameLength(this.buffer);
             if (length === null || this.buffer.length < length) {
                 return frames;
             }

@@ -9,6 +9,7 @@ import {
     encodeMspV2,
     isCompleteMspFrame,
     isMspRequest,
+    mspFrameLength,
     parseMspResponse
 } from './msp';
 
@@ -326,5 +327,37 @@ describe('streaming parser', () => {
         parser.reset();
         const frame = encodeMspV1(MSP_COMMANDS.MSP_API_VERSION, bytes(1), 'response');
         expect(parser.push(frame).length).toBe(1);
+    });
+});
+
+/**
+ * `mspFrameLength` became public in block 3: `am32-sim`'s `SimFc` has to act as
+ * the flight controller, and knowing how many bytes one frame occupies is the
+ * one piece of the parser it cannot do without. Exported rather than duplicated.
+ */
+describe('mspFrameLength', () => {
+    it('returns null until the header is complete', () => {
+        const frame = encodeMspV1(MSP_COMMANDS.MSP_API_VERSION, new Uint8Array([1, 2, 3]));
+
+        expect(mspFrameLength(frame.slice(0, 2))).toBeNull();
+        expect(mspFrameLength(frame.slice(0, 3))).toBeNull();
+        expect(mspFrameLength(frame.slice(0, 4))).toBe(frame.length);
+    });
+
+    it('agrees with the encoders for v1, jumbo v1 and v2', () => {
+        const v1 = encodeMspV1(MSP_COMMANDS.MSP_MOTOR, new Uint8Array(16));
+        expect(mspFrameLength(v1)).toBe(v1.length);
+
+        const jumbo = encodeMspV1(MSP_COMMANDS.MSP_MOTOR, new Uint8Array(300));
+        expect(mspFrameLength(jumbo.slice(0, 6))).toBeNull();
+        expect(mspFrameLength(jumbo)).toBe(jumbo.length);
+
+        const v2 = encodeMspV2(MSP_COMMANDS.MSP2_SEND_DSHOT_COMMAND, new Uint8Array(5));
+        expect(mspFrameLength(v2.slice(0, 7))).toBeNull();
+        expect(mspFrameLength(v2)).toBe(v2.length);
+    });
+
+    it('returns null for a magic byte that is neither M nor X', () => {
+        expect(mspFrameLength(Uint8Array.from([0x24, 0x59, 0x3C, 0x00]))).toBeNull();
     });
 });

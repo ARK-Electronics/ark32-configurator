@@ -35,10 +35,12 @@ ENV NODE_ENV=production \
 COPY --from=prerelease /usr/src/app/.output ./.output
 COPY --from=prerelease /usr/src/app/node_modules ./node_modules
 COPY --from=prerelease /usr/src/app/package.json ./package.json
+COPY --from=prerelease /usr/src/app/yarn.lock ./yarn.lock
 COPY --from=prerelease /usr/src/app/prisma ./prisma
 COPY --from=prerelease /usr/src/app/prisma.config.ts ./prisma.config.ts
+COPY --from=prerelease /usr/src/app/scripts ./scripts
 
 EXPOSE 3000
 USER node
 
-ENTRYPOINT ["sh", "-c", "npx prisma migrate deploy && node .output/server/index.mjs"]
+ENTRYPOINT ["node", "scripts/start.mjs"]

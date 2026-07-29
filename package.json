@@ -11,7 +11,7 @@
     "generate": "nuxt prepare && prisma generate && nuxt generate",
     "prepare": "nuxt prepare",
     "preview": "nuxt preview",
-    "start": "prisma migrate deploy && node .output/server/index.mjs",
+    "start": "node scripts/start.mjs",
     "upload:files": "node deploy-files/upload.ts",
     "lint": "eslint --ext .ts,.js,.vue .",
     "prisma:generate": "prisma generate",

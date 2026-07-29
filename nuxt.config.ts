@@ -26,16 +26,18 @@ export default defineNuxtConfig({
 
     runtimeConfig: {
         redis: { // Default values
-            host: process.env.REDIS_HOST,
+            host: '',
             port: 6379
             /* other redis connector options */
         },
+        // Empty defaults so Nitro does not bake local/docker credentials into the build.
+        // Override at runtime with NUXT_REDIS_HOST / MYSQL_* / DATABASE_URL env vars.
         mariadb: {
-            host: process.env.MYSQL_HOST || 'mariadb',
-            port: parseInt(process.env.MYSQL_PORT || '3306'),
-            user: process.env.MYSQL_USER || 'am32',
-            password: process.env.MYSQL_PASSWORD || 'am32password',
-            database: process.env.MYSQL_DATABASE || 'am32'
+            host: '',
+            port: 3306,
+            user: '',
+            password: '',
+            database: ''
         }
     },
 

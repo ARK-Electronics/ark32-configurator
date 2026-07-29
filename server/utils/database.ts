@@ -9,13 +9,30 @@ type DbConfig = {
     database: string;
 };
 
+/** Dynamic env read so Nitro cannot bake build-time placeholders into the bundle. */
+function env (name: string): string | undefined {
+    const value = process.env[name];
+    if (value === undefined || value === '') {
+        return undefined;
+    }
+    return value;
+}
+
+function isLoopbackOrPlaceholder (host: string): boolean {
+    return (
+        host === '127.0.0.1' ||
+        host === 'localhost' ||
+        host === '::1' ||
+        host === 'prisma-generate.invalid'
+    );
+}
+
 /**
  * Resolve MariaDB/MySQL connection settings.
  * Prefer DATABASE_URL (Sevalla internal URL), then discrete MYSQL_* vars.
- * Never silently fall back to 127.0.0.1 — that only works in local docker-compose.
  */
 function resolveDbConfig (): DbConfig {
-    const databaseUrl = process.env.DATABASE_URL?.trim();
+    const databaseUrl = env('DATABASE_URL')?.trim();
 
     if (databaseUrl) {
         try {
@@ -23,6 +40,12 @@ function resolveDbConfig (): DbConfig {
             const database = parsed.pathname.replace(/^\//, '').split('/')[0];
             if (!parsed.hostname || !database) {
                 throw new Error('DATABASE_URL must include host and database name');
+            }
+            if (isLoopbackOrPlaceholder(parsed.hostname)) {
+                throw new Error(
+                    `DATABASE_URL host is ${parsed.hostname} — that only works inside docker-compose. ` +
+                    'In Sevalla, use the Database internal hostname (e.g. from the linked MariaDB service).'
+                );
             }
             return {
                 host: parsed.hostname,
@@ -33,26 +56,31 @@ function resolveDbConfig (): DbConfig {
             };
         } catch (err) {
             console.error('[db] Invalid DATABASE_URL:', err);
-            throw new Error(
-                'Invalid DATABASE_URL. Expected mysql://user:pass@host:3306/dbname'
-            );
+            throw err instanceof Error
+                ? err
+                : new Error('Invalid DATABASE_URL. Expected mysql://user:pass@host:3306/dbname');
         }
     }
 
-    const host = process.env.MYSQL_HOST || process.env.NUXT_MARIADB_HOST;
-    const user = process.env.MYSQL_USER || process.env.NUXT_MARIADB_USER;
-    const password = process.env.MYSQL_PASSWORD || process.env.NUXT_MARIADB_PASSWORD || '';
-    const database = process.env.MYSQL_DATABASE || process.env.NUXT_MARIADB_DATABASE;
-    const port = Number(
-        process.env.MYSQL_PORT || process.env.NUXT_MARIADB_PORT || 3306
-    );
+    const host = env('MYSQL_HOST') || env('NUXT_MARIADB_HOST');
+    const user = env('MYSQL_USER') || env('NUXT_MARIADB_USER');
+    const password = env('MYSQL_PASSWORD') || env('NUXT_MARIADB_PASSWORD') || '';
+    const database = env('MYSQL_DATABASE') || env('NUXT_MARIADB_DATABASE');
+    const port = Number(env('MYSQL_PORT') || env('NUXT_MARIADB_PORT') || 3306);
 
     if (host && user && database) {
+        if (isLoopbackOrPlaceholder(host)) {
+            throw new Error(
+                `MYSQL_HOST is ${host} — use the Sevalla Database internal hostname, not localhost.`
+            );
+        }
         return { host, port, user, password, database };
     }
 
     throw new Error(
-        'Database not configured. Set DATABASE_URL (recommended) or MYSQL_HOST, MYSQL_USER, MYSQL_PASSWORD, MYSQL_DATABASE in Sevalla environment variables. Use the internal hostname from Sevalla Database, not 127.0.0.1.'
+        'Database not configured. In Sevalla → Application → Environment variables, set DATABASE_URL ' +
+        'to the internal connection string from Database hosting (not 127.0.0.1). ' +
+        'Or set MYSQL_HOST, MYSQL_USER, MYSQL_PASSWORD, MYSQL_DATABASE. Ensure variables are available at Runtime, not only Build.'
     );
 }
 
@@ -69,7 +97,7 @@ const prismaClientSingleton = () => {
         password: config.password,
         port: config.port,
         database: config.database,
-        connectionLimit: 10,
+        connectionLimit: 5,
         connectTimeout: 10_000
     });
     return new PrismaClient({ adapter });
@@ -92,7 +120,7 @@ function getPrisma (): PrismaClientSingleton {
 export const prisma = new Proxy({} as PrismaClientSingleton, {
     get (_target, prop, receiver) {
         const client = getPrisma();
-        const value = Reflect.get(client, prop, receiver);
+        const value = Reflect.get(client as object, prop, receiver);
         return typeof value === 'function' ? value.bind(client) : value;
     }
 });

@@ -1,12 +1,12 @@
 import { defineConfig } from 'prisma/config';
 import 'dotenv/config';
 
-// `prisma generate` only needs a URL shape; it does not connect to the DB.
-// Allow CI/Nixpacks builds without secrets. Runtime still requires a real
-// DATABASE_URL (see server/utils/database.ts).
+// prisma generate does not open a DB connection, but Prisma still requires a URL
+// string. Use a non-routable placeholder only when unset — never bake this into
+// the Nuxt server bundle (do not export DATABASE_URL during `nuxt build`).
 const databaseUrl =
-    process.env.DATABASE_URL ??
-    'mysql://am32:am32password@127.0.0.1:3306/am32';
+    process.env.DATABASE_URL ||
+    'mysql://build:build@prisma-generate.invalid:3306/build';
 
 export default defineConfig({
     schema: 'prisma/schema.prisma',

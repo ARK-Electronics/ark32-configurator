@@ -47,13 +47,14 @@
         {
             "id": "2",
             "title": "Link and transports",
-            "status": "in-progress",
+            "status": "done",
             "dependsOn": [
                 "1b"
             ],
             "doneWhenCmd": "test -f packages/am32-core/src/link/link.test.ts && bash scripts/assert-core-hygiene.sh",
             "doneWhen": "yarn verify, plus a test proving two concurrent request() calls serialise, plus assert-core-hygiene",
-            "notes": "Transport, Link, injectable Clock, drain semantics, retry, TimeoutPolicy. packages/am32-web replaces webserial-wrapper. Fixes E, G (hang + double drain), C."
+            "notes": "Transport, Link, injectable Clock, drain semantics, retry, TimeoutPolicy. packages/am32-web replaces webserial-wrapper. Fixes E, G (hang + double drain), C.",
+            "handoffNote": "docs/plans/overhaul/notes/block-2.md"
         },
         {
             "id": "3",

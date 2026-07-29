@@ -46,9 +46,10 @@ Nuxt consumes `am32-core` straight from TypeScript source via an `alias` +
 
 ## Gotchas
 
-- `yarn lint` has 36 `no-console` warnings on purpose (protocol logging). It is
+- `yarn lint` has 27 `no-console` warnings on purpose (protocol logging). It is
   green at 0 **errors** — keep it there. New code in `packages/` should not add
-  console calls.
+  console calls. The warning count drops as blocks delete legacy code; only the
+  0-errors part is a gate.
 - `prisma/generated/` is generated and eslint-ignored. Never hand-edit it.
 - The audit line references in issue #3 were written against commit `4094dad`.
   Re-verify them before trusting them; earlier blocks move code.

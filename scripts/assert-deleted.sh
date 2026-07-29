@@ -52,6 +52,8 @@ assert_dep_absent() {
 
 echo "USB-direct connection mode"
 assert_path_absent   src/communication/direct.ts        "whole module"
+assert_symbol_absent Direct                             "USB-direct session class"
+assert_symbol_absent DIRECT_COMMANDS                    "USB-direct bootloader command enum"
 assert_symbol_absent isDirectConnectDevice              "USB-direct guard"
 assert_symbol_absent usbDirectVendorIds                 "USB-direct guard"
 assert_symbol_absent usbDirectDeviceIdExceptions        "USB-direct guard"
@@ -60,12 +62,14 @@ assert_symbol_absent isDirectConnect                    "serialStore flag + its 
 echo
 echo "Bootloader flashing"
 assert_symbol_absent AmjType                            ".amj flash tab type"
+assert_symbol_absent amj                                ".amj file input + parse in the flash modal"
 
 echo
 echo "Bootloader downloads"
 assert_symbol_absent bootloaders                        "MinIO/Redis mount + catalog listing"
 assert_symbol_absent bootloaderData                     "release sync"
 assert_symbol_absent bootloaderStream                   "release sync"
+assert_symbol_absent bootloader_data                    "downloads page accordion slot"
 
 echo
 if [ "$FAIL" -ne 0 ]; then

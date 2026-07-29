@@ -59,13 +59,14 @@
         {
             "id": "3",
             "title": "Simulated FC and ESCs",
-            "status": "in-progress",
+            "status": "done",
             "dependsOn": [
                 "2"
             ],
             "doneWhenCmd": "bash scripts/assert-fault-coverage.sh",
             "doneWhen": "yarn verify, plus every fault knob implemented and referenced by a test",
-            "notes": "packages/am32-sim: SimEsc, SimFc (ArduPilot + Betaflight profiles), SimTransport, the fault knobs, virtual clock. Fidelity comes from the firmware sources -- read them with subagents. Previous run never started: the 5-hour session limit was exhausted by block 2 at 23:42 on 2026-07-28 and all three attempts hit it instantly."
+            "notes": "packages/am32-sim: SimEsc, SimFc (ArduPilot + Betaflight profiles), SimTransport, the fault knobs, virtual clock. Fidelity comes from the firmware sources -- read them with subagents. Previous run never started: the 5-hour session limit was exhausted by block 2 at 23:42 on 2026-07-28 and all three attempts hit it instantly.",
+            "handoffNote": "docs/plans/overhaul/notes/block-3.md"
         },
         {
             "id": "4",

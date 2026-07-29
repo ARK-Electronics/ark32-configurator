@@ -207,11 +207,18 @@ fix to `git checkout --`.
 | `flash` begins at address 0 instead of the firmware start | 7 failed |
 | the ESC's name is read from channel 0 instead of the target | 1 failed |
 | the "no name to check against" warning is dropped | 1 failed |
+| `flash` skips the reset and the re-read | 1 failed |
+| `flash` emits no per-chunk progress | 1 failed |
+| `writeSettings` reports the pre-write image as what it wrote | 1 failed |
 | a component imports `am32-core/link`, `am32-core/framing/msp`, the barrel and `am32-web` | 4 lint errors |
 | a component imports `am32-core/session` (must stay legal) | 0 lint errors |
 | `src/communication/msp.ts` comes back | gate exits 1, naming 3 assertions |
 | the `queue` dependency comes back | gate exits 1 |
 | a `deviceHandles` field comes back in the store | gate exits 1 |
+
+Three consecutive `vitest run` invocations give identical results (296 passed), and
+neither the core nor the simulator can read a wall clock, so there is nothing for
+these to be flaky about.
 
 **One mutation survived and it taught me something.** Passing `0` instead of
 `target` to `checkImageMatchesEsc` changed nothing: that parameter only feeds the

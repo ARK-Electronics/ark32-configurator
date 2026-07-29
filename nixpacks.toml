@@ -1,0 +1,5 @@
+# Prisma 7 requires Node 20.19+, 22.12+, or 24+.
+# Nixpacks only pins major versions from nixpkgs; nodejs_20 is too old,
+# so use Node 22 for a supported runtime.
+[variables]
+NIXPACKS_NODE_VERSION = "22"

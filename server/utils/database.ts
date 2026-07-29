@@ -10,12 +10,14 @@ type DbConfig = {
 };
 
 /** Dynamic env read so Nitro cannot bake build-time placeholders into the bundle. */
-function env (name: string): string | undefined {
-    const value = process.env[name];
-    if (value === undefined || value === '') {
-        return undefined;
+function env (...names: string[]): string | undefined {
+    for (const name of names) {
+        const value = process.env[name];
+        if (value !== undefined && value !== '') {
+            return value;
+        }
     }
-    return value;
+    return undefined;
 }
 
 function isLoopbackOrPlaceholder (host: string): boolean {
@@ -29,22 +31,25 @@ function isLoopbackOrPlaceholder (host: string): boolean {
 
 /**
  * Resolve MariaDB/MySQL connection settings.
- * Prefer DATABASE_URL (Sevalla internal URL), then discrete MYSQL_* vars.
+ * Supports:
+ * - DATABASE_URL / DB_URL (Sevalla internal connection default)
+ * - MYSQL_* and Sevalla DB_* discrete vars (DB_HOST, DB_USERNAME, …)
  */
 function resolveDbConfig (): DbConfig {
-    const databaseUrl = env('DATABASE_URL')?.trim();
+    // Sevalla "Add environment variables" defaults to DB_URL, not DATABASE_URL
+    const databaseUrl = env('DATABASE_URL', 'DB_URL')?.trim();
 
     if (databaseUrl) {
         try {
             const parsed = new URL(databaseUrl);
             const database = parsed.pathname.replace(/^\//, '').split('/')[0];
             if (!parsed.hostname || !database) {
-                throw new Error('DATABASE_URL must include host and database name');
+                throw new Error('DATABASE_URL/DB_URL must include host and database name');
             }
             if (isLoopbackOrPlaceholder(parsed.hostname)) {
                 throw new Error(
-                    `DATABASE_URL host is ${parsed.hostname} — that only works inside docker-compose. ` +
-                    'In Sevalla, use the Database internal hostname (e.g. from the linked MariaDB service).'
+                    `Database host is ${parsed.hostname} — that only works inside docker-compose. ` +
+                    'In Sevalla, use the Database internal connection (DB_URL), not localhost.'
                 );
             }
             return {
@@ -55,32 +60,32 @@ function resolveDbConfig (): DbConfig {
                 database
             };
         } catch (err) {
-            console.error('[db] Invalid DATABASE_URL:', err);
+            console.error('[db] Invalid DATABASE_URL/DB_URL:', err);
             throw err instanceof Error
                 ? err
-                : new Error('Invalid DATABASE_URL. Expected mysql://user:pass@host:3306/dbname');
+                : new Error('Invalid DATABASE_URL/DB_URL. Expected mysql://user:pass@host:3306/dbname');
         }
     }
 
-    const host = env('MYSQL_HOST') || env('NUXT_MARIADB_HOST');
-    const user = env('MYSQL_USER') || env('NUXT_MARIADB_USER');
-    const password = env('MYSQL_PASSWORD') || env('NUXT_MARIADB_PASSWORD') || '';
-    const database = env('MYSQL_DATABASE') || env('NUXT_MARIADB_DATABASE');
-    const port = Number(env('MYSQL_PORT') || env('NUXT_MARIADB_PORT') || 3306);
+    const host = env('MYSQL_HOST', 'DB_HOST', 'NUXT_MARIADB_HOST');
+    const user = env('MYSQL_USER', 'DB_USERNAME', 'DB_USER', 'NUXT_MARIADB_USER');
+    const password = env('MYSQL_PASSWORD', 'DB_PASSWORD', 'NUXT_MARIADB_PASSWORD') || '';
+    const database = env('MYSQL_DATABASE', 'DB_DATABASE', 'DB_NAME', 'NUXT_MARIADB_DATABASE');
+    const port = Number(env('MYSQL_PORT', 'DB_PORT', 'NUXT_MARIADB_PORT') || 3306);
 
     if (host && user && database) {
         if (isLoopbackOrPlaceholder(host)) {
             throw new Error(
-                `MYSQL_HOST is ${host} — use the Sevalla Database internal hostname, not localhost.`
+                `DB host is ${host} — use the Sevalla Database internal hostname, not localhost.`
             );
         }
         return { host, port, user, password, database };
     }
 
     throw new Error(
-        'Database not configured. In Sevalla → Application → Environment variables, set DATABASE_URL ' +
-        'to the internal connection string from Database hosting (not 127.0.0.1). ' +
-        'Or set MYSQL_HOST, MYSQL_USER, MYSQL_PASSWORD, MYSQL_DATABASE. Ensure variables are available at Runtime, not only Build.'
+        'Database not configured. Link a Sevalla Database with internal connection env vars ' +
+        '(DB_URL or DATABASE_URL), available at Runtime. ' +
+        'Or set DB_HOST / DB_USERNAME / DB_PASSWORD / DB_DATABASE / DB_PORT.'
     );
 }
 

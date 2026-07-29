@@ -31,38 +31,77 @@ function isUsableDatabaseUrl (url) {
     return /^mysql(s)?:\/\//i.test(trimmed);
 }
 
-const databaseUrl = readEnv('DATABASE_URL');
-const mysqlHost = readEnv('MYSQL_HOST') || readEnv('NUXT_MARIADB_HOST');
+// Sevalla injects DB_URL by default; also accept DATABASE_URL
+const databaseUrl = readEnv('DATABASE_URL') || readEnv('DB_URL');
+const mysqlHost =
+    readEnv('MYSQL_HOST') ||
+    readEnv('DB_HOST') ||
+    readEnv('NUXT_MARIADB_HOST');
 
 console.info('[start] NODE_ENV=', readEnv('NODE_ENV'));
 console.info('[start] HOST=', readEnv('HOST') || readEnv('NITRO_HOST'));
 console.info('[start] PORT=', readEnv('PORT'));
 console.info(
-    '[start] DATABASE_URL set=',
+    '[start] DATABASE_URL/DB_URL set=',
     Boolean(databaseUrl),
     databaseUrl
         ? `(host hint: ${databaseUrl.replace(/^.*@/, '').replace(/\/.*$/, '')})`
         : ''
 );
-console.info('[start] MYSQL_HOST=', mysqlHost || '(unset)');
+console.info('[start] DB_HOST/MYSQL_HOST=', mysqlHost || '(unset)');
 
 if (isUsableDatabaseUrl(databaseUrl)) {
+    // Prisma CLI reads DATABASE_URL — mirror Sevalla's DB_URL if needed
+    const migrateEnv = {
+        ...process.env,
+        DATABASE_URL: databaseUrl
+    };
     console.info('[start] Running prisma migrate deploy…');
     const migrate = spawnSync(
         process.execPath,
         ['node_modules/prisma/build/index.js', 'migrate', 'deploy'],
-        { stdio: 'inherit', env: process.env, shell: false }
+        { stdio: 'inherit', env: migrateEnv, shell: false }
     );
     if (migrate.status !== 0) {
         console.error(
             '[start] prisma migrate deploy failed (exit',
             migrate.status,
-            '). Booting app anyway — fix DATABASE_URL / DB connectivity.'
+            '). Booting app anyway — fix DB_URL / DATABASE_URL / DB connectivity.'
+        );
+    }
+} else if (mysqlHost && !isUsableDatabaseUrl(databaseUrl)) {
+    // Build a URL from Sevalla discrete vars so migrate still works
+    const user = readEnv('DB_USERNAME') || readEnv('DB_USER') || readEnv('MYSQL_USER');
+    const password = readEnv('DB_PASSWORD') || readEnv('MYSQL_PASSWORD') || '';
+    const database = readEnv('DB_DATABASE') || readEnv('DB_NAME') || readEnv('MYSQL_DATABASE');
+    const port = readEnv('DB_PORT') || readEnv('MYSQL_PORT') || '3306';
+    if (user && database && mysqlHost && !/127\.0\.0\.1|localhost/i.test(mysqlHost)) {
+        const built = `mysql://${encodeURIComponent(user)}:${encodeURIComponent(password)}@${mysqlHost}:${port}/${database}`;
+        console.info('[start] Built DATABASE_URL from DB_* vars; running migrate…');
+        const migrate = spawnSync(
+            process.execPath,
+            ['node_modules/prisma/build/index.js', 'migrate', 'deploy'],
+            {
+                stdio: 'inherit',
+                env: { ...process.env, DATABASE_URL: built },
+                shell: false
+            }
+        );
+        if (migrate.status !== 0) {
+            console.error(
+                '[start] prisma migrate deploy failed (exit',
+                migrate.status,
+                '). Booting app anyway.'
+            );
+        }
+    } else {
+        console.warn(
+            '[start] Skipping migrations: need DB_URL/DATABASE_URL or complete DB_* vars (not localhost).'
         );
     }
 } else {
     console.warn(
-        '[start] Skipping migrations: set a real DATABASE_URL (Sevalla internal MySQL/MariaDB host, not 127.0.0.1).'
+        '[start] Skipping migrations: set DB_URL or DATABASE_URL (Sevalla internal host, not 127.0.0.1).'
     );
 }
 

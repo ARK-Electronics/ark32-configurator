@@ -17,7 +17,6 @@ import { WebSerialTransport } from 'am32-web';
  * (audit item E).
  */
 class Serial {
-    private log: LogFn = (_s: string) => {};
     private logError: LogFn = (_s: string) => {};
 
     private transport: WebSerialTransport | null = null;
@@ -35,7 +34,6 @@ class Serial {
     ): Promise<void> {
         await this.deinit();
 
-        this.log = log;
         this.logError = logError;
 
         this.transport = new WebSerialTransport(port, {

@@ -23,13 +23,14 @@
         {
             "id": "1a",
             "title": "Delete removed features",
-            "status": "in-progress",
+            "status": "done",
             "dependsOn": [
                 "0.5"
             ],
             "doneWhenCmd": "bash scripts/assert-deleted.sh",
             "doneWhen": "yarn verify && bash scripts/assert-deleted.sh",
-            "notes": "Bootloader flashing (.amj tab, AmjType), USB-direct mode (src/communication/direct.ts and its guards), bootloader downloads. Mechanical, no protocol work. Bootloader info display in EscView stays."
+            "notes": "Bootloader flashing (.amj tab, AmjType), USB-direct mode (src/communication/direct.ts and its guards), bootloader downloads. Mechanical, no protocol work. Bootloader info display in EscView stays.",
+            "handoffNote": "docs/plans/overhaul/notes/block-1a.md"
         },
         {
             "id": "1b",

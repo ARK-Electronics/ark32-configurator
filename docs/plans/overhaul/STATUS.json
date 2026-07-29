@@ -23,7 +23,7 @@
         {
             "id": "1a",
             "title": "Delete removed features",
-            "status": "todo",
+            "status": "in-progress",
             "dependsOn": [
                 "0.5"
             ],

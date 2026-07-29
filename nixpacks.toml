@@ -21,4 +21,5 @@ cmds = [
 cmds = ["DATABASE_URL=\"${DATABASE_URL:-mysql://build:build@127.0.0.1:3306/build}\" yarn run build"]
 
 [start]
-cmd = "node .output/server/index.mjs"
+# Apply schema then boot Nitro. DATABASE_URL must be set at runtime (Sevalla env).
+cmd = "yarn prisma migrate deploy && node .output/server/index.mjs"

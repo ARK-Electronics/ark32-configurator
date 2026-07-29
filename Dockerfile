@@ -40,4 +40,5 @@ COPY --from=build /app/prisma.config.ts ./prisma.config.ts
 EXPOSE 3000
 USER node
 
-CMD ["node", ".output/server/index.mjs"]
+# DATABASE_URL must be provided at runtime (Sevalla env / linked database).
+CMD ["sh", "-c", "npx prisma migrate deploy && node .output/server/index.mjs"]

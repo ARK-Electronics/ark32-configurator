@@ -141,16 +141,17 @@ interface ImageSpinnerImage {
     class?: string;
 }
 
-const { data: sponsorsResponse } = await useFetch<{ data: Sponsor[] }>('/api/sponsors');
+const { data: sponsorsResponse } = await useFetch<{ data: Sponsor[] }>('/api/sponsors', {
+    default: () => ({ data: [] })
+});
 
 const images = computed<ImageSpinnerImage[]>(() => {
-    if (!sponsorsResponse.value?.data) {
-        return [];
-    }
-    return sponsorsResponse.value.data.map(sponsor => ({
+    const sponsors = sponsorsResponse.value?.data ?? [];
+    return sponsors.map(sponsor => ({
         path: sponsor.image,
         url: sponsor.url,
         class: sponsor.class || undefined
     }));
 });
+
 </script>

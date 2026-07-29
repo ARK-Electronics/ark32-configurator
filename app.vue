@@ -1,13 +1,10 @@
 <template>
   <div>
     <NuxtPwaManifest />
-    <div class="min-h-screen bg-gray-950">
-      <NuxtLayout v-if="serialStore.hasSerial" class="h-full">
+    <div class="min-h-screen bg-gray-950 text-white">
+      <NuxtLayout class="h-full">
         <NuxtPage />
       </NuxtLayout>
-      <div v-else>
-        No WebSerial
-      </div>
       <UNotifications />
     </div>
   </div>
@@ -21,7 +18,7 @@ const { $pwa } = useNuxtApp();
 const toast = useToast();
 
 onMounted(() => {
-    if ($pwa.offlineReady) {
+    if ($pwa?.offlineReady) {
         toast.add({
             icon: 'i-material-symbols-install-desktop',
             color: 'green',
@@ -30,7 +27,7 @@ onMounted(() => {
         });
     }
 
-    if ($pwa.needRefresh) {
+    if ($pwa?.needRefresh) {
         toast.add({
             icon: 'i-material-symbols-cloud-sync',
             color: 'green',
@@ -47,14 +44,16 @@ onMounted(() => {
 const serialStore = useSerialStore();
 const { log, logWarning, logError } = useLogStore();
 
-if (navigator && 'serial' in navigator) {
+if (import.meta.client && typeof navigator !== 'undefined' && 'serial' in navigator) {
     serialStore.hasSerial = true;
     Msp.init(log, logWarning, logError);
     FourWay.init(log, logWarning, logError);
     Direct.init(log, logWarning, logError);
 
     log('initializing...');
-} else {
-    logError('WebSerial not supported, use other browser!');
+} else if (import.meta.client) {
+    serialStore.hasSerial = false;
+    logError('WebSerial not supported, use Chrome/Edge for ESC configuration.');
 }
 </script>
+

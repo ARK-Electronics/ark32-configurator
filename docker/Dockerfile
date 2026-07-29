@@ -41,4 +41,4 @@ COPY --from=prerelease /usr/src/app/prisma.config.ts ./prisma.config.ts
 EXPOSE 3000
 USER node
 
-ENTRYPOINT ["node", ".output/server/index.mjs"]
+ENTRYPOINT ["sh", "-c", "npx prisma migrate deploy && node .output/server/index.mjs"]

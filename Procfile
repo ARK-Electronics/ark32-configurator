@@ -1,1 +1,1 @@
-web: node .output/server/index.mjs
+web: yarn prisma migrate deploy && node .output/server/index.mjs

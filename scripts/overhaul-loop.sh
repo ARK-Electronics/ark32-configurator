@@ -29,7 +29,7 @@
 #   OVERHAUL_BLOCK_TIMEOUT=5400     per-block timeout in seconds (90 min)
 #   OVERHAUL_MAX_ATTEMPTS=2         attempts per block before giving up
 #   OVERHAUL_MODEL='opus[1m]'
-#   OVERHAUL_EFFORT=max
+#   OVERHAUL_EFFORT=xhigh          # see the note in the preflight below
 
 set -uo pipefail
 cd "$(dirname "$0")/.."
@@ -39,7 +39,11 @@ DEADLINE_MIN="${OVERHAUL_DEADLINE_MIN:-0}"
 BLOCK_TIMEOUT="${OVERHAUL_BLOCK_TIMEOUT:-5400}"
 MAX_ATTEMPTS="${OVERHAUL_MAX_ATTEMPTS:-2}"
 MODEL="${OVERHAUL_MODEL:-opus[1m]}"
-EFFORT="${OVERHAUL_EFFORT:-max}"
+# xhigh, not max. Anthropic's own guidance is that xhigh is the best setting for
+# coding and agentic work, and that max shows diminishing returns and is prone to
+# overthinking. For an unattended overnight run the difference is not academic:
+# max spends materially more tokens per block for no reliable quality gain.
+EFFORT="${OVERHAUL_EFFORT:-xhigh}"
 
 STATUS=docs/plans/overhaul/STATUS.json
 LOGDIR=docs/plans/overhaul/logs
@@ -67,6 +71,16 @@ mkdir -p "$LOGDIR" "$NOTEDIR"
 # --- preflight ---------------------------------------------------------------
 
 command -v claude >/dev/null || die "claude CLI not on PATH"
+
+# Which credential the spawned agents will bill against. The CLI resolves
+# ANTHROPIC_API_KEY first and the subscription login second, so a stray key in
+# the environment silently moves an overnight run onto API billing.
+if [ -n "${ANTHROPIC_API_KEY:-}" ]; then
+    warn "ANTHROPIC_API_KEY is set -- this run will bill the API, not your subscription."
+    warn "Unset it first if that is not what you want."
+else
+    say "billing: subscription login (no ANTHROPIC_API_KEY in environment)"
+fi
 [ -f "$STATUS" ] || die "$STATUS not found"
 python3 -c "import json;json.load(open('$STATUS'))" || die "$STATUS is not valid JSON"
 

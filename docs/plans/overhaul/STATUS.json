@@ -71,14 +71,15 @@
         {
             "id": "4",
             "title": "Session API",
-            "status": "in-progress",
+            "status": "done",
             "dependsOn": [
                 "3"
             ],
             "doneWhenCmd": "test -f packages/am32-core/src/session.ts && ls packages/am32-core/src/**/session*.test.ts packages/am32-sim/src/**/*session*.test.ts >/dev/null 2>&1",
             "doneWhen": "yarn verify, plus simulated 4-ESC ArduPilot enumerate, partial-failure enumerate that does not throw, and a Betaflight connect that skips the 4 s wait",
             "hardwareCheckpoint": "outstanding -- enumerate on a real ARK FPV and a Betaflight board. Cannot run unattended; record it, do not block on it.",
-            "notes": "Am32Session + FC quirk modules. Fixes B and H. First attempt ran 18 minutes then hit the 5-hour session limit mid-run; attempts 2-3 hit it instantly. No code failure -- yarn verify was green (233 tests)."
+            "notes": "Am32Session + FC quirk modules. Fixes B and H. First attempt ran 18 minutes then hit the 5-hour session limit mid-run; attempts 2-3 hit it instantly. No code failure -- yarn verify was green (233 tests).",
+            "handoffNote": "docs/plans/overhaul/notes/block-4.md"
         },
         {
             "id": "5",

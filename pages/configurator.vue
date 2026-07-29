@@ -11,7 +11,7 @@
           Please connect to a device and read settings.
         </div>
       </div>
-      <div v-else-if="serialStore.isFourWay || serialStore.isDirectConnect" class="pt-4 pb-12 h-full">
+      <div v-else-if="serialStore.isFourWay" class="pt-4 pb-12 h-full">
         <UTabs
           :items="tabs"
         >

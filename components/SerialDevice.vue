@@ -6,7 +6,7 @@
         <USelectMenu
           v-model="baudrate"
           class="flex-grow"
-          :disabled="serialStore.selectedDevice.id === '-1' || serialStore.hasConnection || isDirectConnectDevice"
+          :disabled="serialStore.selectedDevice.id === '-1' || serialStore.hasConnection"
           :options="baudrateOptions"
         />
       </div>
@@ -25,7 +25,7 @@
         <div class="flex gap-2 items-center">
           <UIcon name="i-fluent-serial-port-16-filled" dynamic :class="[serialStore.hasConnection ? 'text-green-500' : 'text-red-500']" />
         </div>
-        <div v-if="serialStore.hasConnection && (serialStore.mspData.motorCount > 0 || serialStore.isDirectConnect)" class="w-full flex justify-between gap-4">
+        <div v-if="serialStore.hasConnection && serialStore.mspData.motorCount > 0" class="w-full flex justify-between gap-4">
           <div class="flex gap-2">
             <UChip
               v-for="n of serialStore.mspData.motorCount"
@@ -191,29 +191,6 @@
                   </div>
                 </div>
               </template>
-              <template #bootloader>
-                <div class="">
-                  <UAlert
-                    color="red"
-                    variant="soft"
-                    icon=""
-                    title="Attention!"
-                    description="Flashing the bootloader will erase all settings and data on the mcu and if you flash the wrong bootloader, it will only be recoverable via SWD, are you sure you want to continue?"
-                    class="mb-2"
-                  />
-                  <UInput
-                    type="file"
-                    size="sm"
-                    icon="i-heroicons-folder"
-                    accept=".amj"
-                    :disabled="isFlashingActive"
-                    @change="selectFile($event)"
-                  />
-                  <div v-if="isFlashingActive" class="text-green-500 text-center">
-                    Flashing local '{{ fileInput?.name ?? 'UNKNOWN' }}'
-                  </div>
-                </div>
-              </template>
             </UTabs>
           </div>
           <div v-else class="text-green-500 text-center">
@@ -278,10 +255,7 @@
             </div>
           </template>
           <div>
-            <div v-if="serialStore.isDirectConnect" class="text-center">
-              Do you want to overwrite the current config with default settings?
-            </div>
-            <div v-else class="flex flex-col gap-2">
+            <div class="flex flex-col gap-2">
               <div class="text-center">
                 Select ESC(s) to apply:
               </div>
@@ -302,7 +276,7 @@
           </div>
           <template #footer>
             <div class="text-right">
-              <UButton color="green" :label="serialStore.isDirectConnect ? 'Yes' : 'Apply'" :disabled="savingOrApplyingSelectedEscs.length === 0" @click="applyDefaultConfig" />
+              <UButton color="green" label="Apply" :disabled="savingOrApplyingSelectedEscs.length === 0" @click="applyDefaultConfig" />
             </div>
           </template>
         </UCard>
@@ -393,7 +367,6 @@
 <script setup lang="ts">
 
 import commandsQueue from '~/src/communication/commands.queue';
-import { DIRECT_COMMANDS, Direct } from '~/src/communication/direct';
 import { FOUR_WAY_COMMANDS, FourWay } from '~/src/communication/four_way';
 import Msp, { MSP_COMMANDS } from '~/src/communication/msp';
 import Serial from '~/src/communication/serial';
@@ -407,8 +380,6 @@ const escStore = useEscStore();
 const { escData } = storeToRefs(escStore);
 const { log, logWarning, logError } = useLogStore();
 const usbFCVendorIds = [0x0483, 0x2E3C, 0x2E8A, 0x1209, 0x26AC, 0x27AC, 0x2DAE, 0x3162, 0x35A7];
-const usbDirectVendorIds = [0x1A86, 0x0403, 0x4348, 0x26BA, 0x10C4];
-const usbDirectDeviceIdExceptions = [0xE204];
 const flashModalOpen = ref(false);
 const applyDefaultConfigModalOpen = ref(false);
 const saveConfigModalOpen = ref(false);
@@ -443,8 +414,7 @@ const releasesOptions = computed(() => {
 
 const flashTabs = computed(() => [
     { label: 'Release', disabled: isFlashingActive.value, slot: 'release' },
-    { label: 'Local', disabled: isFlashingActive.value, slot: 'local' },
-    { label: 'Bootloader', disabled: isFlashingActive.value, slot: 'bootloader' }
+    { label: 'Local', disabled: isFlashingActive.value, slot: 'local' }
 ]);
 
 watch(releasesOptions, (d) => {
@@ -500,18 +470,10 @@ const baudrate = ref('115200');
 
 const requestSerialDevices = async () => {
     await navigator.serial.requestPort({
-        filters: [
-            ...usbFCVendorIds.map(id => ({ usbVendorId: id })),
-            ...usbDirectVendorIds.map(id => ({ usbVendorId: id }))
-        ]
+        filters: usbFCVendorIds.map(id => ({ usbVendorId: id }))
     });
     await fetchPairedDevices();
 };
-
-const isDirectConnectDevice = computed(
-    () => usbDirectVendorIds.includes(Number.parseInt(serialStore.selectedDevice.id.split(':')[0])) &&
-          !usbDirectDeviceIdExceptions.includes(Number.parseInt(serialStore.selectedDevice.id.split(':')[1]))
-);
 
 const fetchPairedDevices = async () => {
     const pairedDevices: SerialPort[] = await navigator.serial.getPorts();
@@ -520,11 +482,6 @@ const fetchPairedDevices = async () => {
     if (pairedDevices.length > 0) {
         if (serialStore.selectedDevice.id === '-1') {
             serialStore.selectLastDevice();
-            if (serialStore.selectedDevice) {
-                if (isDirectConnectDevice.value) {
-                    baudrate.value = '19200';
-                }
-            }
         }
     } else {
         if (serialStore.hasConnection) {
@@ -602,78 +559,74 @@ const connectToDevice = async () => {
 
                 log('Connected to device');
 
-                if (isDirectConnectDevice.value) {
-                    connectToEsc();
-                } else {
-                    // ArduPilot only hands the USB/MAVLink port to MSP/BLHeli after
-                    // ~4s with no inbound MAVLink (GCS_MAVLink alternative protocol).
-                    // Close Mission Planner/QGC first; then wait here before MSP.
-                    log('Waiting 4.5s for ArduPilot MSP window (no MAVLink on this port)...');
-                    const waitUntil = Date.now() + 4500;
-                    while (Date.now() < waitUntil) {
-                        await Serial.drain(50, 100);
-                        await delay(200);
-                    }
-                    await Serial.drain();
-
-                    let result = null as Awaited<ReturnType<typeof Msp.prototype.sendWithPromise>> | null;
-                    for (let attempt = 1; attempt <= 5; attempt++) {
-                        try {
-                            result = await Msp.getInstance().sendWithPromise(MSP_COMMANDS.MSP_API_VERSION);
-                            break;
-                        } catch (err: any) {
-                            logError(`MSP_API_VERSION try ${attempt}/5: ${err.message}`);
-                            await Serial.drain();
-                            await delay(500);
-                        }
-                    }
-
-                    if (!result) {
-                        logError('trying to exit fourway and try again.');
-                        serialStore.isFourWay = true;
-                        await FourWay.getInstance().sendWithPromise(FOUR_WAY_COMMANDS.cmd_InterfaceExit).catch(() => null);
-                        await delay(1000);
-                        serialStore.isFourWay = false;
-                        await Serial.drain();
-                        result = await Msp.getInstance().sendWithPromise(MSP_COMMANDS.MSP_API_VERSION).catch(() => {
-                            logError('Not in four way mode? Close all GCS apps, unplug/replug USB, wait 5s after Connect.');
-                            return null;
-                        });
-                    }
-
-                    if (result === null) {
-                        await disconnectFromDevice();
-
-                        throw new Error('Cant read or write to device!');
-                    }
-
-                    commandsQueue.processMspResponse(result!.commandName, result!.data);
-
-                    await Msp.getInstance().sendWithPromise(MSP_COMMANDS.MSP_FC_VARIANT).then((result) => {
-                        if (result) {
-                            commandsQueue.processMspResponse(result!.commandName, result!.data);
-                        }
-                    });
-                    await Msp.getInstance().sendWithPromise(MSP_COMMANDS.MSP_BATTERY_STATE).then((result) => {
-                        if (result) {
-                            commandsQueue.processMspResponse(result!.commandName, result!.data);
-                        }
-                    });
-                    await Msp.getInstance().sendWithPromise(Msp.getInstance().getTypeMotorCommand(serialStore.mspData.type)).then((result) => {
-                        if (result) {
-                            commandsQueue.processMspResponse(result!.commandName, result!.data);
-                        }
-                    });
-
-                    const passthroughResult = await Msp.getInstance().sendWithPromise(MSP_COMMANDS.MSP_SET_PASSTHROUGH);
-
-                    await delay(2000);
-
-                    serialStore.isFourWay = true;
-
-                    escStore.expectedCount = passthroughResult?.data.getUint8(0) ?? 0;
-                    log(`Passthrough ready, ESC count from FC: ${escStore.expectedCount}`);
+                // ArduPilot only hands the USB/MAVLink port to MSP/BLHeli after
+                // ~4s with no inbound MAVLink (GCS_MAVLink alternative protocol).
+                // Close Mission Planner/QGC first; then wait here before MSP.
+                log('Waiting 4.5s for ArduPilot MSP window (no MAVLink on this port)...');
+                const waitUntil = Date.now() + 4500;
+                while (Date.now() < waitUntil) {
+                    await Serial.drain(50, 100);
+                    await delay(200);
                 }
+                await Serial.drain();
+
+                let result = null as Awaited<ReturnType<typeof Msp.prototype.sendWithPromise>> | null;
+                for (let attempt = 1; attempt <= 5; attempt++) {
+                    try {
+                        result = await Msp.getInstance().sendWithPromise(MSP_COMMANDS.MSP_API_VERSION);
+                        break;
+                    } catch (err: any) {
+                        logError(`MSP_API_VERSION try ${attempt}/5: ${err.message}`);
+                        await Serial.drain();
+                        await delay(500);
+                    }
+                }
+
+                if (!result) {
+                    logError('trying to exit fourway and try again.');
+                    serialStore.isFourWay = true;
+                    await FourWay.getInstance().sendWithPromise(FOUR_WAY_COMMANDS.cmd_InterfaceExit).catch(() => null);
+                    await delay(1000);
+                    serialStore.isFourWay = false;
+                    await Serial.drain();
+                    result = await Msp.getInstance().sendWithPromise(MSP_COMMANDS.MSP_API_VERSION).catch(() => {
+                        logError('Not in four way mode? Close all GCS apps, unplug/replug USB, wait 5s after Connect.');
+                        return null;
+                    });
+                }
+
+                if (result === null) {
+                    await disconnectFromDevice();
+
+                    throw new Error('Cant read or write to device!');
+                }
+
+                commandsQueue.processMspResponse(result!.commandName, result!.data);
+
+                await Msp.getInstance().sendWithPromise(MSP_COMMANDS.MSP_FC_VARIANT).then((result) => {
+                    if (result) {
+                        commandsQueue.processMspResponse(result!.commandName, result!.data);
+                    }
+                });
+                await Msp.getInstance().sendWithPromise(MSP_COMMANDS.MSP_BATTERY_STATE).then((result) => {
+                    if (result) {
+                        commandsQueue.processMspResponse(result!.commandName, result!.data);
+                    }
+                });
+                await Msp.getInstance().sendWithPromise(Msp.getInstance().getTypeMotorCommand(serialStore.mspData.type)).then((result) => {
+                    if (result) {
+                        commandsQueue.processMspResponse(result!.commandName, result!.data);
+                    }
+                });
+
+                const passthroughResult = await Msp.getInstance().sendWithPromise(MSP_COMMANDS.MSP_SET_PASSTHROUGH);
+
+                await delay(2000);
+
+                serialStore.isFourWay = true;
+
+                escStore.expectedCount = passthroughResult?.data.getUint8(0) ?? 0;
+                log(`Passthrough ready, ESC count from FC: ${escStore.expectedCount}`);
 
                 serialStore.hasConnection = true;
             } else {
@@ -684,77 +637,51 @@ const connectToDevice = async () => {
 };
 
 const connectToEsc = async () => {
-    if (isDirectConnectDevice.value) {
-        escStore.isLoading = true;
+    if (!serialStore.isFourWay) {
+        const result = await Msp.getInstance().sendWithPromise(MSP_COMMANDS.MSP_SET_PASSTHROUGH);
 
-        serialStore.isDirectConnect = true;
+        await delay(2000);
 
-        savingOrApplyingSelectedEscs.value = [1];
+        serialStore.isFourWay = true;
 
-        escStore.count = 1;
-        escStore.expectedCount = 1;
+        escStore.expectedCount = result?.data.getUint8(0) ?? 0;
+    }
 
-        escData.value = [];
+    escData.value = [];
+    escStore.count = 0;
+    escStore.isLoading = true;
 
-        await delay(200);
+    // Brief settle after MSP_SET_PASSTHROUGH before hammering soft-serial.
+    await delay(500);
 
-        const info = await Direct.getInstance().init();
+    for (let i = 0; i < escStore.expectedCount; ++i) {
         const newEscData = {
             isLoading: true,
-            data: info!
+            isError: false
         } as EscData;
+        escData.value.push(newEscData);
 
-        escData.value = [newEscData];
+        try {
+            // Use the same retry budget as post-flash re-read (was 2 by default).
+            const result = await FourWay.getInstance().getInfo(i, 10);
+            escStore.escData[i].data = result;
+            escStore.count += 1;
+        } catch (e) {
+            console.error(e);
+            logError(`ESC #${i + 1} failed to enumerate`);
+            newEscData.isError = true;
+        }
 
         newEscData.isLoading = false;
-        escStore.isLoading = false;
-    } else {
-        if (!serialStore.isFourWay) {
-            const result = await Msp.getInstance().sendWithPromise(MSP_COMMANDS.MSP_SET_PASSTHROUGH);
 
-            await delay(2000);
-
-            serialStore.isFourWay = true;
-
-            escStore.expectedCount = result?.data.getUint8(0) ?? 0;
+        // Inter-ESC settle: avoids leftover soft-serial state / host RX
+        // contamination that disproportionately kills the last channel.
+        if (i < escStore.expectedCount - 1) {
+            await delay(300);
         }
-
-        escData.value = [];
-        escStore.count = 0;
-        escStore.isLoading = true;
-
-        // Brief settle after MSP_SET_PASSTHROUGH before hammering soft-serial.
-        await delay(500);
-
-        for (let i = 0; i < escStore.expectedCount; ++i) {
-            const newEscData = {
-                isLoading: true,
-                isError: false
-            } as EscData;
-            escData.value.push(newEscData);
-
-            try {
-                // Use the same retry budget as post-flash re-read (was 2 by default).
-                const result = await FourWay.getInstance().getInfo(i, 10);
-                escStore.escData[i].data = result;
-                escStore.count += 1;
-            } catch (e) {
-                console.error(e);
-                logError(`ESC #${i + 1} failed to enumerate`);
-                newEscData.isError = true;
-            }
-
-            newEscData.isLoading = false;
-
-            // Inter-ESC settle: avoids leftover soft-serial state / host RX
-            // contamination that disproportionately kills the last channel.
-            if (i < escStore.expectedCount - 1) {
-                await delay(300);
-            }
-        }
-
-        escStore.isLoading = false;
     }
+
+    escStore.isLoading = false;
 
     if (
         escStore.escData.filter(
@@ -817,11 +744,6 @@ const writeConfig = async () => {
         }
         escStore.isSaving = false;
         escStore.settingsDirty = false;
-    } else if (serialStore.isDirectConnect && escStore.firstValidEscData) {
-        const mcu = new Mcu(escStore.firstValidEscData.data.meta.signature);
-        await Direct.getInstance().writeChunked(mcu.getEepromOffset(), objectToSettingsArray(escStore.firstValidEscData.data.settings, escStore.firstValidEscData?.data.settings.LAYOUT_REVISION as number));
-        escStore.firstValidEscData.data.settingsDirty = false;
-        escStore.firstValidEscData.data.settingsBuffer = objectToSettingsArray(escStore.firstValidEscData.data.settings, escStore.firstValidEscData?.data.settings.LAYOUT_REVISION as number);
     }
 };
 
@@ -935,149 +857,38 @@ const startModalFlash = async () => {
             }
             startFlash(await fileInput.value.text());
         }
-    } else if (currentTab.value === 2) {
-        const logStore = useLogStore();
-        if (fileInput.value && escStore.firstValidEscData) {
-            const amj: AmjType = await fileInput.value.text().then((text: string) => {
-                const parsed = JSON.parse(text);
-                return {
-                    ...parsed,
-                    hex: atob(parsed.hex)
-                };
-            });
-
-            const fileFlash = Flash.parseHex(amj.hex);
-            const tmp = escStore.firstValidEscData.data;
-            if (fileFlash && tmp.meta?.am32?.mcuType && tmp.meta?.am32?.fileName) {
-                if (amj.mcuType !== tmp.meta.am32.mcuType) {
-                    logStore.logError('Invalid MCU type in amj file.');
-                    throw new Error('Invalid MCU type in amj file.');
-                }
-
-                if (amj.pin !== tmp.bootloader.pin) {
-                    logStore.logError('Pin does not match! Aborting flash!');
-                    throw new Error('Pin does not match! Aborting flash!');
-                }
-            }
-            startFlash(amj.hex);
-        }
     }
 };
 
 const startFlash = async (hexString: string) => {
-    if (serialStore.isDirectConnect && escStore.firstValidEscData) {
-        const logStore = useLogStore();
-        const parsed = Flash.parseHex(hexString);
-        const mcu = new Mcu(escStore.firstValidEscData.data.meta.signature);
-        if (parsed) {
-            escStore.activeTarget = 0;
-            escStore.bytesWritten = 0;
+    for (const n of savingOrApplyingSelectedEscs.value) {
+        const i = n - 1;
+        escStore.activeTarget = i;
+        await FourWay.getInstance().writeHex(i, hexString, 200);
+        await delay(200);
+        escStore.step = 'Resetting';
+        await FourWay.getInstance().reset(i);
+        await delay(5000);
+        escStore.step = 'Read ESC';
+        try {
+            const result = await FourWay.getInstance().getInfo(i, 20);
 
-            let i = 0;
-            if (parsed.bytes < 27 * 1024 - 1 + 32) {
-                const filled = new Uint8Array(27 * 1024 - 1).fill(0xFF);
-                let bytes32Index = -1;
-                for (let i = 0; i < parsed.data.length; i++) {
-                    if (parsed.data[i].bytes === 32) {
-                        bytes32Index = i;
-                        break;
-                    }
-                }
-                if (bytes32Index === -1) {
-                    toast.add({
-                        title: 'Error',
-                        color: 'red',
-                        description: '32 bytes block not found in hex file!'
-                    });
-                    return;
-                }
-                let lowIndex = -1;
-                for (let i = 0; i < parsed.data.length; i++) {
-                    if (lowIndex === -1 || parsed.data[i].address < parsed.data[lowIndex].address) {
-                        lowIndex = i;
-                    }
-                }
-                filled.set(parsed.data[lowIndex].data);
-                for (let i = 0; i < parsed.data.length; i++) {
-                    if (i !== lowIndex && i !== bytes32Index) {
-                        filled.set(parsed.data[i].data, parsed.data[i].address - parsed.data[lowIndex].address);
-                        parsed.data[i].bytes = 0;
-                    }
-                }
-                parsed.data[lowIndex].data = Array.from(filled);
-                parsed.data[lowIndex].bytes = filled.length;
-                parsed.bytes = filled.length + 32;
-            }
-
-            escStore.totalBytes = parsed.bytes;
-            escStore.step = 'Writing';
-
-            for (const start of parsed.data) {
-                if (start.bytes === 0) {
-                    continue;
-                }
-                i = 0;
-                logStore.log(`Flashing: 0x${start.address.toString(16)}, ${start.bytes} bytes`);
-                const CHUNK_SIZE = 64;
-                while (true) {
-                    logStore.log(`... 0x${((start.address - mcu.getFlashOffset()) + (i * CHUNK_SIZE)).toString(16)} - 0x${((start.address - mcu.getFlashOffset()) + ((i + 1) * CHUNK_SIZE) - 1).toString(16)}`);
-                    const chunk = new Uint8Array(start.data.slice(i * CHUNK_SIZE, ((i + 1) * CHUNK_SIZE > start.data.length ? start.data.length - 1 : (i + 1) * CHUNK_SIZE)));
-                    await Direct.getInstance().writeBufferToAddress((start.address - mcu.getFlashOffset()) + (i * CHUNK_SIZE), chunk);
-                    escStore.bytesWritten += CHUNK_SIZE;
-                    i += 1;
-                    if ((i + 1) * CHUNK_SIZE > start.data.length) {
-                        break;
-                    }
-                }
-            }
-            escStore.step = 'Rewriting config';
-            await writeConfig();
-            escStore.step = 'Resetting';
-            await Direct.getInstance().writeCommand(DIRECT_COMMANDS.cmd_Reset, 0);
-            await delay(3000);
-            escStore.step = 'Read config';
-            await Direct.getInstance().init();
-
-            escStore.activeTarget = -1;
+            escStore.escData[i].data = result;
+            escStore.escData[i].isLoading = false;
+        } catch (e) {
+            console.error(e);
         }
-    } else {
-        for (const n of savingOrApplyingSelectedEscs.value) {
-            const i = n - 1;
-            escStore.activeTarget = i;
-            await FourWay.getInstance().writeHex(i, hexString, 200);
-            await delay(200);
-            if (currentTab.value === 2) {
-                escStore.step = 'Sending default config';
-                await applyDefaultConfig();
-            }
-            escStore.step = 'Resetting';
-            await FourWay.getInstance().reset(i);
-            await delay(5000);
-            if (currentTab.value === 2) {
-                escStore.step = 'Done';
-            } else {
-                escStore.step = 'Read ESC';
-                try {
-                    const result = await FourWay.getInstance().getInfo(i, 20);
-
-                    escStore.escData[i].data = result;
-                    escStore.escData[i].isLoading = false;
-                } catch (e) {
-                    console.error(e);
-                }
-            }
-        }
-        escStore.step = '';
-        escStore.bytesWritten = 0;
-        escStore.totalBytes = 0;
-        escStore.activeTarget = -1;
-        flashModalOpen.value = false;
-
-        await connectToEsc();
-        /* if (file_input.value) {
-            file_input.value.value = '';
-        } */
     }
+    escStore.step = '';
+    escStore.bytesWritten = 0;
+    escStore.totalBytes = 0;
+    escStore.activeTarget = -1;
+    flashModalOpen.value = false;
+
+    await connectToEsc();
+    /* if (file_input.value) {
+        file_input.value.value = '';
+    } */
 };
 
 const applyDefaultConfig = async () => {

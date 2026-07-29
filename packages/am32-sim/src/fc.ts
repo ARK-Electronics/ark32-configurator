@@ -67,6 +67,14 @@ const AP_PASSTHROUGH_FAILURE_COMMAND = 0x0F;
 /** Betaflight's `cmd_DeviceReset` busy-wait when the request sets ADDR_L=1 (BF:604-611). */
 const BF_ESC_REBOOT_HOLD_MS = 300;
 
+/**
+ * Inbound buffer cap. A 4-way request tops out at 263 bytes and an MSP v1
+ * request at 262; the firmware's own input buffers are 256 params plus header.
+ * Twice the largest frame is enough to reassemble anything real and small enough
+ * that garbage cannot accumulate.
+ */
+const MAX_RX_BYTES = 512;
+
 export interface SimFcBattery {
     cells: number
     capacityMah: number
@@ -160,8 +168,11 @@ export class SimFc implements SimEndpoint {
      * the window from *now*, which is how a test models a GCS frame arriving and
      * taking the port back.
      *
-     * Bytes that arrive while the gate is shut are read and discarded, and do
-     * **not** extend the window (GCS:1943,1970-1977). That is the whole reason a
+     * Only a **valid MAVLink frame** re-arms it in the real firmware
+     * (`alternative.last_mavlink_ms = now_ms` at GCS:1977, reached only on
+     * `MAVLINK_FRAMING_OK` at GCS:1974). Bytes arriving while the gate is shut
+     * are read and offered to the MAVLink parser, which rejects them, so MSP
+     * traffic never pushes the handoff back. That is the whole reason a
      * probe-then-wait connect works and the configurator's unconditional 4.5 s
      * wait is unnecessary -- audit **H**.
      */
@@ -245,8 +256,8 @@ export class SimFc implements SimEndpoint {
     receive (chunk: Uint8Array): void {
         if (!this.mspAvailable) {
             // GCS_Common reads the byte and hands it only to the MAVLink parser
-            // while the gate is shut. Nothing buffers it, and it does not push
-            // the handoff back.
+            // while the gate is shut. Nothing buffers it, and it cannot parse as
+            // MAVLink, so it does not push the handoff back.
             this.counts.gatedBytes += chunk.length;
             return;
         }
@@ -254,7 +265,12 @@ export class SimFc implements SimEndpoint {
         const merged = new Uint8Array(this.rx.length + chunk.length);
         merged.set(this.rx, 0);
         merged.set(chunk, this.rx.length);
-        this.rx = merged;
+        // Both firmwares have a fixed input buffer -- Betaflight's `ParamBuf` is
+        // 256 bytes and ArduPilot's `blheli.buf` 256 -- so an unbounded one here
+        // would be both unfaithful and a way for injected garbage containing a
+        // stray 0x2F to grow the buffer forever. Keep the tail: a frame that is
+        // still arriving is at the end.
+        this.rx = merged.length <= MAX_RX_BYTES ? merged : merged.slice(merged.length - MAX_RX_BYTES);
 
         this.pump();
     }
@@ -777,15 +793,28 @@ export class SimFc implements SimEndpoint {
             return;
         }
 
+        // Short-circuit, exactly as `BL_WriteA` does: `BL_SendCMDSetAddress`
+        // failing means `CMD_SET_BUFFER` and `CMD_PROG_FLASH` are never put on
+        // the wire (AP:915-942, BFavr:290-299). Carrying on would program the
+        // payload at whatever address the *previous* write left behind, since
+        // the bootloader does not move its pointer on a refused SET_ADDRESS.
         const addressed = esc.setAddress(request.address);
         spend(addressed.durationMs);
+        if (addressed.ack !== 'ok') {
+            send([0], FOUR_WAY_ACK.ACK_D_GENERAL_ERROR);
+            return;
+        }
+
         const buffered = esc.setBuffer(request.params);
         spend(buffered.durationMs);
+        if (buffered.ack !== 'ok') {
+            send([0], FOUR_WAY_ACK.ACK_D_GENERAL_ERROR);
+            return;
+        }
+
         const written = esc.programFlash();
         spend(written.durationMs);
-
-        const ok = addressed.ack === 'ok' && buffered.ack === 'ok' && written.ack === 'ok';
-        send([0], ok ? FOUR_WAY_ACK.ACK_OK : FOUR_WAY_ACK.ACK_D_GENERAL_ERROR);
+        send([0], written.ack === 'ok' ? FOUR_WAY_ACK.ACK_OK : FOUR_WAY_ACK.ACK_D_GENERAL_ERROR);
     }
 
     private pageErase (
@@ -805,7 +834,11 @@ export class SimFc implements SimEndpoint {
 
         const addressed = esc.setAddress(address);
         spend(addressed.durationMs);
-        const erased = esc.erasePage();
+        // Same short-circuit as the write path: `BL_PageErase` gives up when the
+        // address handshake fails (AP:869-877, BFavr:314-321).
+        const erased = addressed.ack === 'ok'
+            ? esc.erasePage()
+            : { ack: 'timeout' as const, durationMs: 0 };
         spend(erased.durationMs);
 
         const failed = addressed.ack !== 'ok' || erased.ack !== 'ok';

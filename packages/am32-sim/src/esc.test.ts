@@ -19,7 +19,12 @@ import {
     isCompleteFourWayFrame,
     parseFourWayResponse
 } from 'am32-core/framing/fourway';
-import { SimEsc } from './esc';
+import {
+    ADDRESS_MAGIC_CONTINUE,
+    ADDRESS_MAGIC_EEPROM,
+    ADDRESS_MAGIC_FILE_NAME,
+    SimEsc
+} from './esc';
 import { createSimHarness } from './harness';
 
 describe('SimEsc: the flash and EEPROM model', () => {
@@ -128,14 +133,40 @@ describe('SimEsc: the flash and EEPROM model', () => {
         expect(esc.read(4).ack).toBe('ok');
     });
 
-    it('refuses an address below 1024 and a write below the application start', () => {
+    it('refuses a reserved address below 1024 and a write below the application start', () => {
         const esc = new SimEsc();
         esc.connect();
 
-        expect(esc.setAddress(0x20).ack).toBe('error');
+        // Reserved: below 1024 and not one of the three magic values (BL:563-566).
+        expect(esc.setAddress(0x0100).ack).toBe('error');
 
         esc.setAddress(0x0800);
         expect(esc.programFlash().ack).toBe('error');
+    });
+
+    it('resolves the three magic addresses, which are AM32\'s answer to 0xFFFF', () => {
+        // BL:220-226 and :553-562. `ADDRESS_MAGIC_CONTINUE` restores the end of
+        // the previous read, which is how a large EEPROM read is split into
+        // chunks without a fresh SET_ADDRESS each time.
+        const esc = new SimEsc();
+        esc.connect();
+
+        esc.setAddress(ADDRESS_MAGIC_FILE_NAME);
+        const name = esc.read(32);
+        expect(name.ack).toBe('ok');
+        expect(String.fromCharCode(...name.data.slice(0, name.data.indexOf(0)))).toBe('ARK_4IN1_F051');
+
+        esc.setAddress(ADDRESS_MAGIC_EEPROM);
+        const head = esc.read(4);
+        expect(head.ack).toBe('ok');
+        expect(Array.from(head.data)).toEqual(Array.from(esc.eeprom.slice(0, 4)));
+
+        // The read zeroed the pointer, so only CONTINUE can pick up where it
+        // left off.
+        esc.setAddress(ADDRESS_MAGIC_CONTINUE);
+        const rest = esc.read(4);
+        expect(rest.ack).toBe('ok');
+        expect(Array.from(rest.data)).toEqual(Array.from(esc.eeprom.slice(4, 8)));
     });
 });
 

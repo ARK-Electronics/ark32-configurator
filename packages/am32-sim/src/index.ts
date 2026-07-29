@@ -18,10 +18,9 @@ export { LinkFaults, garbageBytes } from './faults';
 export type { DropBytesOptions, FaultDirection, InjectGarbageOptions } from './faults';
 
 export {
-    BR_ERROR_COMMAND,
-    BR_ERROR_CRC,
-    BR_NONE,
-    BR_SUCCESS,
+    ADDRESS_MAGIC_CONTINUE,
+    ADDRESS_MAGIC_EEPROM,
+    ADDRESS_MAGIC_FILE_NAME,
     FIRMWARE_START,
     SimEsc
 } from './esc';

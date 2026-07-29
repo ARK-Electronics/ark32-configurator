@@ -24,7 +24,7 @@ import {
     isCompleteMspFrame,
     parseMspResponse
 } from 'am32-core/framing/msp';
-import { EEPROM_SIZE } from 'am32-core/eeprom/layout';
+import { EEPROM_SIZE, EepromLayout } from 'am32-core/eeprom/layout';
 import { createMcuInfo } from 'am32-core/mcu';
 import { createSimHarness, type SimHarnessOptions } from './harness';
 
@@ -299,11 +299,14 @@ describe('fault knob: esc[n].corruptCrc', () => {
         // Corrupt exactly one reply, so "the retry recovered" is exact rather
         // than a race against the clock.
         h.escs[0]!.corruptCrc = 1;
+        const attemptsBefore = h.link.stats.attempts;
 
         const result = await readAddress(h, h.escs[0]!.eepromOffset, EEPROM_SIZE, 3);
 
         expect(result.ok).toBe(true);
-        expect(h.link.stats.attempts).toBeGreaterThanOrEqual(2);
+        // The delta, not the cumulative total: connect() and initFlash() have
+        // already made two attempts before this read starts.
+        expect(h.link.stats.attempts - attemptsBefore).toBe(2);
         // A failed attempt marks the line dirty, so the retry drains first --
         // that is what stops a corrupt reply from being read as the next
         // exchange's answer.
@@ -567,5 +570,75 @@ describe('the ACK_OK that is not a success', () => {
             bf.escs[0]!.eepromOffset
         ) as FourWayResponse;
         expect(bfFrame.ack).toBe(FOUR_WAY_ACK.ACK_D_GENERAL_ERROR);
+    });
+});
+
+describe('SimFc: the settings write path blocks 4 and 6 will use', () => {
+    it('round-trips a 192-byte image over 4-way, except for the stamped byte 2', async () => {
+        // The end-to-end shape of a settings write: cmd_DeviceWrite at the
+        // EEPROM base, then cmd_DeviceRead back. Everything survives except
+        // BOOT_LOADER_REVISION, which the bootloader overwrites with its own
+        // version on the way in (BL:517-525). Block 6's verification has to
+        // expect exactly that one difference.
+        const h = rig({ escCount: 1 });
+        await connect(h);
+        await initFlash(h, 0);
+
+        const original = (await readAddress(h, h.escs[0]!.eepromOffset, EEPROM_SIZE) as {
+            response: FourWayResponse
+        }).response.params;
+
+        const image = original.slice();
+        image[EepromLayout.TIMING_ADVANCE.offset] = 22;
+        image[2] = 0x99; // BOOT_LOADER_REVISION, which will not survive
+        expect(Array.from(image.slice(176, 184))).toEqual([32, 1, 1, 10, 1, 200, 0, 1]);
+
+        const written = await fourWay(h, FOUR_WAY_COMMANDS.cmd_DeviceWrite, image, h.escs[0]!.eepromOffset, {
+            payloadBytes: image.length
+        });
+        expect(written.ok).toBe(true);
+
+        await initFlash(h, 0);
+        const readBack = (await readAddress(h, h.escs[0]!.eepromOffset, EEPROM_SIZE) as {
+            response: FourWayResponse
+        }).response.params;
+
+        expect(readBack).toHaveLength(EEPROM_SIZE);
+        expect(readBack[EepromLayout.TIMING_ADVANCE.offset]).toBe(22);
+        expect(readBack[2]).toBe(h.escs[0]!.bootloaderVersion);
+        expect(readBack[2]).not.toBe(0x99);
+        // Audit A: the CAN block and the reserved bytes are untouched.
+        expect(Array.from(readBack.slice(176, 184))).toEqual([32, 1, 1, 10, 1, 200, 0, 1]);
+        expect(Array.from(readBack.slice(13, 17))).toEqual([0xDE, 0xAD, 0xBE, 0xEF]);
+
+        const expected = image.slice();
+        expected[2] = h.escs[0]!.bootloaderVersion;
+        expect(Array.from(readBack)).toEqual(Array.from(expected));
+    });
+
+    it('does not program anything when the address handshake is refused', async () => {
+        // BL_WriteA gives up as soon as BL_SendCMDSetAddress fails, so
+        // CMD_SET_BUFFER and CMD_PROG_FLASH never reach the wire. The bootloader
+        // does not move its address pointer on a refused SET_ADDRESS, so a
+        // simulator that carried on would program the payload at whatever the
+        // *previous* write targeted -- silently corrupting a page while
+        // correctly reporting failure.
+        const h = rig({ escCount: 1 });
+        await connect(h);
+        await initFlash(h, 0);
+
+        const good = new Uint8Array(256).fill(0x11);
+        expect((await fourWay(h, FOUR_WAY_COMMANDS.cmd_DeviceWrite, good, 0x2000, {
+            payloadBytes: good.length
+        })).ok).toBe(true);
+        const writesBefore = h.escs[0]!.counts.write;
+
+        // 0x0100 is reserved (below 1024, not a magic value), so SET_ADDRESS is
+        // refused and the pointer stays at 0x2000.
+        const refused = await raw(h, FOUR_WAY_COMMANDS.cmd_DeviceWrite, [0xFF, 0xFF, 0xFF, 0xFF], 0x0100);
+
+        expect((refused as FourWayResponse).ack).toBe(FOUR_WAY_ACK.ACK_D_GENERAL_ERROR);
+        expect(h.escs[0]!.counts.write).toBe(writesBefore);
+        expect(Array.from(h.escs[0]!.peek(0x2000, 4))).toEqual([0x11, 0x11, 0x11, 0x11]);
     });
 });

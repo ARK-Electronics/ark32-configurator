@@ -32,10 +32,16 @@ export interface FcProfile {
 
     /**
      * How long the port must be free of valid MAVLink before ArduPilot hands it
-     * to the alternative-protocol handler. `protocol_timeout = 4000`
-     * (GCS:1944). Bytes that arrive inside the window are read and discarded --
-     * they do **not** extend it (GCS:1943,1970-1977), which is what makes a
-     * probe-then-wait connect strategy work at all.
+     * to the alternative-protocol handler. `protocol_timeout = 4000` (GCS:1944).
+     *
+     * What resets the window is a **valid MAVLink frame**, and only that:
+     * `alternative.last_mavlink_ms = now_ms` appears in exactly one place,
+     * GCS:1977, reached only on `MAVLINK_FRAMING_OK` (GCS:1974). Bytes that
+     * arrive while the gate is shut are read (GCS:1943) and offered to the
+     * MAVLink parser (GCS:1970) -- and since `$M<` and `/` are not MAVLink
+     * (whose magic is 0xFE/0xFD), they never parse, so they never push the
+     * handoff back. That is what makes a probe-then-wait connect work: polling
+     * during the window costs nothing but the requests you lose.
      *
      * Zero for Betaflight: MSP answers immediately.
      */
@@ -58,7 +64,17 @@ export interface FcProfile {
      */
     readonly mspErrorFrames: boolean
 
-    /** `MSP_MOTOR` value for an enabled motor: 0 when AP has `mixed_type` outputs (AP:535), 1000 when BF idles (dshot.c:117). */
+    /**
+     * `MSP_MOTOR` value for an enabled motor: 0 when ArduPilot has `mixed_type`
+     * outputs (AP:535), 1000 when Betaflight idles disarmed (`dshot.c:117` maps
+     * a stopped DShot motor to `PWM_RANGE_MIN`).
+     *
+     * Both are the *not in passthrough* value, which is the only one that can be
+     * observed: `esc4wayInit` calls `motorDisable()`, so a real Betaflight board
+     * reads all zeros once in 4-way -- and 1500 in 3D mode. The simulator never
+     * exercises either, because Betaflight does not answer MSP in passthrough at
+     * all. Whatever the number, it is not a motor count.
+     */
     readonly idleMotorValue: number
 
     // ---- 4-way behaviour ---------------------------------------------------
@@ -121,14 +137,17 @@ export interface FcProfile {
     /**
      * `cmd_DeviceWriteEEprom` against an ARM (AM32) target: Betaflight has no
      * case for `imARM_BLB` so its pre-set `ACK_D_GENERAL_ERROR` stands
-     * (BF:815), while ArduPilot discards `BL_WriteA`'s return value and answers
-     * `ACK_OK` having written nothing (AP:1210-1212). Both are wrong; only one
-     * of them tells you so.
+     * (BF:815), while ArduPilot answers `ACK_OK` having written nothing
+     * (AP:1210-1212 discards `BL_WriteA`'s return value).
+     *
+     * Note ArduPilot is not blanket-silent about write failures -- `BL_WriteA`
+     * does set `ACK_D_GENERAL_ERROR` at AP:920/:935 and `BL_SendBuf` at
+     * :671/:687. The one path that leaks `ACK_OK` is a final `BL_GetACK`
+     * timeout (AP:928-932), and since AM32 answers `CMD_PROG_EEPROM` with
+     * `brERRORCOMMAND` that is exactly the path taken. Both firmwares are
+     * wrong here; only one of them tells you so.
      */
     readonly writeEepromSilentlySucceeds: boolean
-
-    /** Soft-serial read budget per byte: `req_bytes * 1000` us on AP, `START_BIT_TIMEOUT_MS` on BF. */
-    readonly readBudgetPerByteMs: number
 }
 
 /** `imARM_BLB` -- what every AM32 ESC classifies as (AP:841-849, BF:328-334). */
@@ -153,8 +172,7 @@ export const ARDUPILOT_PROFILE: FcProfile = {
     staleDeviceInfoOnConnectFailure: false,
     pageEraseEchoesAddress: false,
     readSetAddressFailureAcksOk: true,
-    writeEepromSilentlySucceeds: true,
-    readBudgetPerByteMs: 1
+    writeEepromSilentlySucceeds: true
 };
 
 export const BETAFLIGHT_PROFILE: FcProfile = {
@@ -181,8 +199,7 @@ export const BETAFLIGHT_PROFILE: FcProfile = {
     staleDeviceInfoOnConnectFailure: true,
     pageEraseEchoesAddress: true,
     readSetAddressFailureAcksOk: false,
-    writeEepromSilentlySucceeds: false,
-    readBudgetPerByteMs: 2
+    writeEepromSilentlySucceeds: false
 };
 
 export const PROFILES: Record<FcProfileName, FcProfile> = {

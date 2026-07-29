@@ -60,6 +60,14 @@ export class SimTransport implements Transport {
     private readonly listeners = new Set<(chunk: Uint8Array) => void>();
     private unsubscribe: (() => void) | null = null;
     private open_ = false;
+    /**
+     * When each direction's wire is next free. A serial link carries one byte at
+     * a time, so a chunk cannot start shifting out until the one before it has
+     * finished -- without this a 12-byte reply queued just after a 200-byte one
+     * arrives first, which no real UART can do and which would quietly hide a
+     * reordering bug in whatever is reading.
+     */
+    private readonly busyUntil: Record<FaultDirection, number> = { rx: 0, tx: 0 };
 
     constructor (options: SimTransportOptions) {
         this.clock = options.clock;
@@ -107,7 +115,7 @@ export class SimTransport implements Transport {
         this.writes.push(bytes);
 
         if (bytes.length > 0) {
-            this.after(bytes.length, () => {
+            this.after(bytes.length, 'tx', () => {
                 if (this.open_) {
                     this.endpoint.receive(bytes);
                 }
@@ -129,7 +137,7 @@ export class SimTransport implements Transport {
         if (bytes.length === 0) {
             return;
         }
-        this.after(bytes.length, () => this.deliverNow(bytes, 'rx'));
+        this.after(bytes.length, 'rx', () => this.deliverNow(bytes, 'rx'));
     }
 
     private deliverNow (bytes: Uint8Array, direction: FaultDirection): void {
@@ -145,14 +153,19 @@ export class SimTransport implements Transport {
         }
     }
 
-    private after (byteCount: number, work: () => void): void {
-        const delay = wireMs(byteCount, this.baudRate) + this.latencyMs;
-        if (delay <= 0) {
-            // Still a timer, not a synchronous call: a transport that delivered
-            // its reply inside `write()` would hide every ordering bug there is.
-            this.clock.setTimeout(work, 0);
-            return;
-        }
-        this.clock.setTimeout(work, delay);
+    /**
+     * Schedule `work` for when `byteCount` bytes have finished crossing in
+     * `direction`, queued behind anything already on that wire.
+     *
+     * Always a timer, never a synchronous call, even for a zero-length delay: a
+     * transport that delivered its reply inside `write()` would hide every
+     * ordering bug there is.
+     */
+    private after (byteCount: number, direction: FaultDirection, work: () => void): void {
+        const now = this.clock.now();
+        const startAt = Math.max(now, this.busyUntil[direction]);
+        const finishAt = startAt + wireMs(byteCount, this.baudRate) + this.latencyMs;
+        this.busyUntil[direction] = finishAt;
+        this.clock.setTimeout(work, Math.max(0, finishAt - now));
     }
 }

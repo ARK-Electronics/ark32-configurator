@@ -7,12 +7,20 @@ Landed on `master` on top of `b74b33f`:
 | `70aaad5` | `feat(core): expose 4-way request parsing and response encoding` |
 | `5454360` | `feat(sim): add am32-sim, a simulated flight controller and its ESCs` |
 | `6f4b84c` | `test(sim): cover the rest of the 4-way command set` |
-| (this file) | the handoff note |
+| `72bae8d` | `docs(plan): add the block 3 handoff note` |
+| (see below) | `fix(sim): act on the diff review` -- three real bugs, three coverage gaps |
+
+⚠️ **`6f4b84c`'s commit message is inaccurate.** It says it "drops an unreachable
+guard in `handleMsp`"; that change actually landed in `5454360`, and `6f4b84c`
+contains only tests plus the `pageErase` ACK clarification. The finding itself is
+real and written up below. Nothing was pushed, so the message could have been
+rewritten -- I left it and recorded the correction here instead, because a note
+the next agent reads beats a rewritten history they will not.
 
 ## Verification
 
 ```
-yarn verify                                → exit 0  (lint 0 errors / 19 warnings, typecheck:core + typecheck:app clean, 223 tests in 13 files)
+yarn verify                                → exit 0  (lint 0 errors / 19 warnings, typecheck:core + typecheck:app clean, 233 tests in 13 files)
 done-when (STATUS.json block 3)            → exit 0
   bash scripts/assert-fault-coverage.sh
       ok  unresponsive     packages/am32-sim/src/fc.fourway.test.ts
@@ -20,11 +28,11 @@ done-when (STATUS.json block 3)            → exit 0
       ok  corruptCrc       packages/am32-sim/src/fc.fourway.test.ts
       ok  shortRead        packages/am32-sim/src/fc.fourway.test.ts
       ok  mspError         packages/am32-sim/src/fc.msp.test.ts
-      ok  mavlinkIdleGate  packages/am32-sim/src/transport.test.ts
+      ok  mavlinkIdleGate  packages/am32-sim/src/fc.msp.test.ts
       ok  blockingFourWay  packages/am32-sim/src/fc.msp.test.ts
       ok  dropBytes        packages/am32-sim/src/transport.test.ts
       ok  injectGarbage    packages/am32-sim/src/transport.test.ts
-      ok  canBlock         packages/am32-core/src/eeprom/codec.prop.test.ts
+      ok  canBlock         packages/am32-sim/src/esc.test.ts
 bash scripts/assert-core-hygiene.sh        → exit 0  (block 2's gate, still green)
 yarn install --immutable                   → exit 0  (CI's install step; the new workspace is in the lockfile)
 ./run.sh --no-browser                      → dev server up on :3067, GET /configurator 200, vue-tsc 0 errors
@@ -39,38 +47,102 @@ touch still resolve in the browser graph —
 `/_nuxt/packages/am32-web/src/web-serial-transport.ts` all 200, with the new
 `parseFourWayRequest` present in the transformed output.
 
-New test counts: `fc.fourway.test.ts` 21, `fc.msp.test.ts` 14, `esc.test.ts` 11,
-`transport.test.ts` 10 — 56 in `am32-sim`. Plus 6 in `framing/fourway.test.ts`
-and 3 in `framing/msp.test.ts` for the core's new FC-side framing. The 56
-simulator tests cover tens of seconds of protocol time and run in ~75 ms, which
-is the payoff from block 2's clock.
+New test counts: `fc.fourway.test.ts` 23, `fc.msp.test.ts` 19, `esc.test.ts` 12,
+`transport.test.ts` 12 — 66 in `am32-sim`. Plus 6 in `framing/fourway.test.ts`
+and 3 in `framing/msp.test.ts` for the core's new FC-side framing. The 66
+simulator tests cover tens of seconds of protocol time and run in ~80 ms, which
+is the payoff from block 2's clock. Three consecutive runs give identical
+results; `am32-sim` contains no `Date.now()`, no `new Date()` and no
+`Math.random()`, so there is nothing for it to be flaky about.
 
 Lint is unchanged at **19 warnings, 0 errors** — `am32-sim` adds no console calls.
 
 ### The gate is a presence check; the tests are the behaviour check
 
 `assert-fault-coverage.sh` greps for each knob's *name* in a non-test file and in
-a test file. I checked whether it bites, and **it does not on its own**: renaming
-`SimEsc.corruptCrc` to something else still passes, because the string survives
-in a doc comment. That is not a reason to distrust the block — it is a reason not
-to trust the gate alone. What bites is the test suite, and I proved that by
-mutating each knob's implementation and watching the tests fail:
+a test file. I checked whether it bites, and **it did not**: renaming
+`SimEsc.corruptCrc` still passed, because the string survived in a doc comment.
+Worse, the diff review found two rows passing on outright false positives — the
+test-side grep took the first hit anywhere under `packages/`, so `canBlock`
+matched an unrelated local variable in block 1's `codec.prop.test.ts` and
+`mavlinkIdleGate` matched a line of rig setup in `transport.test.ts`. Both rows
+would have stayed green with the knob's real test deleted.
+
+**I tightened the gate** to require a suite *named after* the knob —
+`describe('fault knob: …<knob>…')`, which is what the plan's own wording asks
+for. All ten rows now resolve to their own suite inside `am32-sim`, and renaming
+one fails the gate (verified). It is still only a presence check; what proves
+behaviour is the test suite, and I established that by mutating each knob's
+implementation and watching specific tests fail:
 
 | Mutation | Result |
 |---|---|
-| `maybeCorrupt` becomes a no-op | `fc.fourway.test.ts` 2 failed / 13 passed |
-| `mspAvailable` always true (idle gate never closes) | `fc.msp.test.ts` 2 failed / 12 passed |
-| `pumpFourWay` escapes to MSP regardless of the knob | `fc.msp.test.ts` 1 failed / 13 passed |
-| `LinkFaults.apply` passes every byte through | `transport.test.ts` 4 failed / 6 passed |
+| `maybeCorrupt` becomes a no-op | `fc.fourway.test.ts` 2 failed |
+| `mspAvailable` always true (idle gate never closes) | `fc.msp.test.ts` 2 failed |
+| `pumpFourWay` escapes to MSP regardless of the knob | `fc.msp.test.ts` 1 failed |
+| `LinkFaults.apply` passes every byte through | `transport.test.ts` 4 failed |
+| the `num_motors` clause dropped from the channel guards | `fc.msp.test.ts` 2 failed |
+| `cmd_DeviceWrite` stops short-circuiting a refused address | `fc.fourway.test.ts` 1 failed |
+| chunks scheduled independently, no wire serialisation | `transport.test.ts` 1 failed |
 
-The third one is worth reading twice. My **first** attempt at that mutation —
+The third row is worth reading twice. My **first** attempt at that mutation —
 deleting the `blockingFourWay` guard from `SimFc.handleMsp` — left all 14 tests
 passing, because that guard was **unreachable**: `handleMsp` is only ever called
 from `pumpMsp`, which only runs when the mode is already `msp`. The real trapdoor
 is in `pumpFourWay`, which eats the bytes before they are ever framed. I deleted
-the dead guard (`6f4b84c`) rather than leaving a check that looks load-bearing
-and never runs. **If block 4 or 5 adds a "belt and braces" guard somewhere, mutate
-it before believing it.**
+the dead guard rather than leaving a check that looks load-bearing and never
+runs. **If block 4 or 5 adds a "belt and braces" guard somewhere, mutate it
+before believing it.**
+
+### What the diff review changed
+
+A subagent reviewed the diff against block 3's done-when in a fresh context. It
+found three real bugs and three coverage gaps; all six are fixed, and the last
+three rows of the mutation table above are the tests that now pin them.
+
+1. **`cmd_DeviceWrite` did not short-circuit a refused `CMD_SET_ADDRESS`.** The
+   bootloader leaves its address pointer alone when it refuses an address, so
+   carrying on to `CMD_SET_BUFFER` + `CMD_PROG_FLASH` programmed the payload at
+   whatever address the *previous* write had targeted — silently corrupting a
+   page while correctly reporting `ACK_D_GENERAL_ERROR`. Real firmware returns
+   as soon as `BL_SendCMDSetAddress` fails (AP:915-942, BFavr:290-299).
+   `cmd_DevicePageErase` had the same shape and is fixed the same way; it was
+   harmless only because `erasePage` is a no-op stub. `deviceRead` already
+   short-circuited, so the three paths were inconsistent.
+2. **`SimTransport` could deliver replies out of order.** Each chunk was
+   scheduled independently as `now + wire(chunk)`, so a 4-byte frame emitted just
+   after a 240-byte one arrived *first* — which no UART can do. Each direction
+   now has a `busyUntil` cursor, so a chunk cannot start shifting out until the
+   one before it has finished. Not reachable from the tests as they stood, but it
+   becomes reachable the moment an exchange times out with its reply still queued
+   and the next exchange is a smaller command — i.e. exactly block 4's
+   enumerate-after-timeout path.
+3. **`SimFc.rx` was unbounded**, unlike `Link.maxRxBytes`. Capped at 512 (tail
+   kept), which is also more faithful: both firmwares have fixed 256-param input
+   buffers.
+4. **`num_motors` was implemented but never varied**, so `channel >= motorCount`
+   in the two channel guards was dead — every test had `motorCount === escs.length`
+   and tripped the `escs.length` clause alone. Section 3's "per-channel
+   `ACK_I_INVALID_CHANNEL` above `num_motors`" was only nominally covered. Now
+   tested at `motorCount: 2` with 4 ESCs, at `motorCount: 0` on Betaflight (the
+   trap where the FC reports zero ESCs and enters passthrough anyway), and at
+   `motorCount: 0` on ArduPilot (an analog-PWM board, where byte 6 is legitimately
+   zero on a flying aircraft).
+5. **`MSP_BATTERY_STATE` had no test** despite being named in section 3. Now has
+   two, including the no-battery state byte.
+6. **No end-to-end 4-way write → 4-way read-back.** Added, and it is the most
+   useful test in the block for what comes next: it writes a 192-byte image over
+   `cmd_DeviceWrite` and reads it back over `cmd_DeviceRead`, asserting that
+   everything survives *except* byte 2, which the bootloader stamps with its own
+   version. That is the shape block 6's verification has to have.
+
+Three smaller things it was right about, also fixed: `SimEsc.continueAddress` was
+written and never read (the three magic addresses `0x20`/`0x21`/`0x22` are now
+implemented, which is what makes it load-bearing, and tested); the `BR_*`
+bootloader ACK constants were exported and used nowhere (deleted — the values are
+in the `EscAck` docstring); and `FcProfile.readBudgetPerByteMs` was read by
+nothing, implying an FC-side read timeout the simulator does not model (deleted —
+see Outstanding).
 
 ## What I built
 
@@ -266,6 +338,40 @@ which the plan and block 2's note got slightly wrong:
 | AM32 bootloader ACKs | not stated | `brSUCCESS 0x30`, `brERRORCOMMAND 0xC1`, `brERRORCRC 0xC2`. `brERRORVERIFY 0xC0` is **never emitted** — there is no verify support. `CMD_KEEP_ALIVE` answers `0xC1` *on purpose* and both FCs count that as success |
 | Bootloader link CRC | block 2 note: "reflected poly 0xA001, little-endian" | Confirmed: CRC-16/ARC, init 0, reflected, no final xor, low byte first (`main.c:364-381`). The greeting and the 9-byte device-info reply carry **no CRC at all** |
 
+**Citations I got wrong the first time**, found by the diff review and corrected
+in the code — recorded because the wrong version was in a source comment, which
+is where block 4 will read it:
+
+- The idle-gate comment said bytes arriving inside the window "are read and
+  discarded ... (GCS:1943,1970-1977)". That range is precisely the code that
+  *does* reset the window: the byte **is** handed to the MAVLink parser at
+  GCS:1970, and GCS:1974-1977 re-arms the timer on `MAVLINK_FRAMING_OK`. The
+  conclusion survives — `$M<` and `/` are not MAVLink, whose magic is 0xFE/0xFD,
+  so they never parse and never push the handoff back — but the mechanism is
+  "MSP is not valid MAVLink", not "the bytes are thrown away unread".
+- `FIRMWARE_START = 0x1000` was labelled `APPLICATION_ADDRESS`. It is
+  `FIRMWARE_RELATIVE_START`; `APPLICATION_ADDRESS` is that plus `MCU_FLASH_START`.
+  **This matters** — see Outstanding.
+- The firmware-name window cited `BL:224-226`, which is the
+  `ADDRESS_MAGIC_CONTINUE` define. The right citation is `ADDRESS_MAGIC_FILE_NAME`
+  at `BL:556-559`, and the NUL truncation is configurator-side.
+- "ArduPilot discards the failure and answers OK" for `cmd_DeviceWriteEEprom` was
+  too strong. `BL_WriteA` *does* set `ACK_D_GENERAL_ERROR` (AP:920, :935), as does
+  `BL_SendBuf` (AP:671, :687); the only path that leaks `ACK_OK` is a final
+  `BL_GetACK` timeout (AP:928-932). Since AM32 answers `CMD_PROG_EEPROM` with
+  `brERRORCOMMAND`, that *is* the path taken, so the simulated behaviour was right
+  and only the reasoning was wrong.
+- `checkAddressWritable` is at `BL:443-446` (`:511-515` is the call site), and
+  "num_motors is legitimately zero" is `AP:1500-1505` (`:1460-1466` is the
+  `digital_mask` assignment).
+
+Two firmware facts that are **build-dependent**, so do not treat the simulator's
+choice as universal: Betaflight's `cmd_InterfaceSetMode` accepts 1..4 only in a
+both-bootloaders build (a BLHeli-bootloader-only target accepts {1,2,4} and
+rejects 3, BF:568 vs :570); and `MSP_MOTOR`'s idle value is 1000 only when *not*
+in passthrough, since `esc4wayInit` calls `motorDisable()` — which the simulator
+never exercises, because Betaflight does not answer MSP in passthrough at all.
+
 Two useful things a later block should not re-derive:
 
 - **AM32 always classifies as `imARM_BLB` (4).** `deviceInfo[0]` is a hardcoded
@@ -298,6 +404,25 @@ Two useful things a later block should not re-derive:
   branch I read — a different ARK build stamps a different number); and the
   assumption that `ADDRESS_SHIFT` is 0 for the 32K and 64K parts, which is what
   makes flash-relative 4-way addresses work unchanged.
+- ⚠️ **`FIRMWARE_START` may be wrong for ARK's firmware.** The simulator uses
+  `0x1000`, which is AM32's `FIRMWARE_RELATIVE_START` — but that constant is
+  **`0x4000` on a `DRONECAN_SUPPORT` build** (`bootloader/main.c:77`), and the
+  simulator's default ESC is an `ARK_4IN1_F051` with a populated CAN block. If
+  ARK ships a DroneCAN build, the writable floor here is 12 KiB too low and block
+  6's flash tests would validate against the wrong layout. It is a `SimEsc`
+  constructor option for exactly that reason. **Check the ARK AM32 build before
+  block 6 relies on it** — this is the single most likely place the simulator and
+  real silicon disagree.
+- **The FC's own per-byte read budget is not modelled.** I removed
+  `FcProfile.readBudgetPerByteMs` rather than leave a field nothing read: dead
+  config that implies a behaviour is worse than an absent one. The consequence is
+  that a slow-but-complete ESC read never becomes an *FC-side* timeout — only
+  `shortRead` produces one, and it fabricates it directly. That is a deliberate
+  consequence of charging `slowMs` outside the ESC operations (see design
+  decision 1). The **host's** budget, which is the thing under test, does key on
+  the variant, in the core's `TimeoutPolicy`. If block 6 wants a real FC-side
+  read timeout, add a per-operation delay to `SimEsc.read` rather than reviving
+  the profile field.
 - **`SimEsc` does not model the bootloader's soft-serial framing**, only its
   operations. `link.dropBytes` and `link.injectGarbage` therefore act on the
   host ↔ FC link only. If block 6 wants to test "the FC retries the ESC", the hook
@@ -312,6 +437,13 @@ Two useful things a later block should not re-derive:
 - **`readSetAddressFailureAcksOk` is the only profile flag whose ArduPilot value
   models a firmware *bug* rather than a design difference.** If ArduPilot ever
   fixes `BL_ReadA`, that flag and its test go away together.
+- **Nothing enforces `noUncheckedIndexedAccess` on `am32-sim`.** The package has
+  no `tsconfig.json` of its own; `typecheck:core` points only at `am32-core`, and
+  the generated Nuxt tsconfig that `typecheck:app` uses sets the flag to `false`.
+  I compiled all seven non-test sources under the core's exact flags by hand and
+  they are clean, but that is discipline, not a gate. `am32-web` has the same
+  hole, so it predates this block; a shared strict tsconfig for the non-core
+  packages would close both.
 - **`docs/TESTING.md` still does not exist.** Block 2's note nominated block 4 to
   create it, since block 4 is the first with a checkpoint of its own. Still true.
 - **`components/SerialDevice.vue` is untouched**, as are `src/communication/*`,
@@ -342,9 +474,14 @@ Two useful things a later block should not re-derive:
    success`). Put the length check in the session's read, in `link.request`'s
    `validate` so it retries with a drain, and this class of bug closes for good.
 
-3. **Mutate before you believe.** The fault-coverage gate is a *presence* check —
-   a knob's name in a doc comment satisfies it. Every claim in this note about a
-   knob working is backed by deleting the implementation and watching a specific
-   test go red, and one of those experiments found dead code I had just written
-   and would otherwise have left behind. It costs about ninety seconds per knob.
-   Do it for whatever block 4 adds, especially anything phrased as a safety check.
+3. **Mutate before you believe, and get the diff reviewed.** The fault-coverage
+   gate is a *presence* check; even after I tightened it, passing it proves only
+   that a suite exists with the right name. Every claim in this note about a knob
+   working is backed by deleting the implementation and watching a specific test
+   go red — seven such experiments, two of which found things I had just written
+   and would otherwise have left behind (an unreachable guard, and a `num_motors`
+   check no test could reach). The fresh-context diff review found three more,
+   including one that would have silently corrupted a flash page. Both cost
+   minutes. Neither is optional at this point in the plan, because from block 4
+   onward the simulator is the *only* thing standing between a protocol bug and
+   real hardware.

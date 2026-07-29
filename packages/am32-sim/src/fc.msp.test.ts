@@ -18,7 +18,13 @@ import {
     isCompleteMspFrame,
     parseMspResponse
 } from 'am32-core/framing/msp';
-import { FOUR_WAY_COMMANDS, encodeFourWayRequest, isCompleteFourWayFrame } from 'am32-core/framing/fourway';
+import {
+    FOUR_WAY_ACK,
+    FOUR_WAY_COMMANDS,
+    encodeFourWayRequest,
+    isCompleteFourWayFrame,
+    parseFourWayResponse
+} from 'am32-core/framing/fourway';
 import { createSimHarness, type SimHarnessOptions } from './harness';
 
 const policy = DEFAULT_TIMEOUT_POLICY;
@@ -51,6 +57,20 @@ async function msp (
             frame => ({ ok: true as const, payload: frame.payload }),
             error => ({ ok: false as const, error })
         );
+    await h.clock.runAll();
+    return settled;
+}
+
+/** One 4-way exchange, reduced to the ACK the FC answered with. */
+async function fourWayAck (h: Rig, command: FOUR_WAY_COMMANDS, params: number[]): Promise<number | null> {
+    const settled = h.link.request(encodeFourWayRequest(command, params, 0), {
+        probe: isCompleteFourWayFrame,
+        timeout: DEFAULT_TIMEOUT_POLICY.forFourWay(command, params.length),
+        retries: 1,
+        label: FOUR_WAY_COMMANDS[command] ?? String(command)
+    })
+        .then(response => parseFourWayResponse(response))
+        .then(frame => frame.ack, () => null);
     await h.clock.runAll();
     return settled;
 }
@@ -161,8 +181,10 @@ describe('fault knob: fc.mavlinkIdleGate', () => {
         expect(h.fc.mspAvailable).toBe(false);
 
         // Polling during the window is the whole point of a probe-then-wait
-        // connect: the bytes are read and dropped, and crucially they do NOT
-        // reset ArduPilot's idle timer (GCS:1943,1970-1977).
+        // connect. The bytes are read (GCS:1943) and offered to the MAVLink
+        // parser (GCS:1970), which rejects them -- only MAVLINK_FRAMING_OK
+        // re-arms the timer (GCS:1974-1977) -- so they cost nothing but the
+        // requests themselves.
         const early = await msp(h, MSP_COMMANDS.MSP_API_VERSION);
         expect(early.ok).toBe(false);
         expect(((early as { error: LinkError }).error).reason).toBe('timeout');
@@ -306,5 +328,96 @@ describe('fault knob: fc.mspError', () => {
 
         expect(result.ok).toBe(false);
         expect(((result as { error: LinkError }).error).reason).toBe('timeout');
+    });
+});
+
+describe('SimFc: the motor count is not the ESC count', () => {
+    it('gates 4-way channels on num_motors, not on how many ESCs are wired up', async () => {
+        // `initFlash`/`deviceReset` check against MSP_MOTOR_CONFIG byte 6, which
+        // is the FC's own num_motors -- not the number of ESCs the simulator
+        // happens to hold. Betaflight `escCount` and ArduPilot `num_motors` are
+        // both derived from the output configuration, so they can be lower.
+        const h = rig({ profile: 'betaflight', escCount: 4, motorCount: 2 });
+        await h.open();
+
+        const config = await msp(h, MSP_COMMANDS.MSP_MOTOR_CONFIG);
+        expect((config as { payload: Uint8Array }).payload[6]).toBe(2);
+
+        expect((await msp(h, MSP_COMMANDS.MSP_SET_PASSTHROUGH)).ok).toBe(true);
+
+        const ok = await fourWayAck(h, FOUR_WAY_COMMANDS.cmd_DeviceInitFlash, [1]);
+        expect(ok).toBe(FOUR_WAY_ACK.ACK_OK);
+
+        // Channel 2 exists as a SimEsc but is above num_motors, so it must be
+        // refused rather than enumerated.
+        const refused = await fourWayAck(h, FOUR_WAY_COMMANDS.cmd_DeviceInitFlash, [2]);
+        expect(refused).toBe(FOUR_WAY_ACK.ACK_I_INVALID_CHANNEL);
+        expect(h.escs[2]!.isConnected).toBe(false);
+
+        expect(await fourWayAck(h, FOUR_WAY_COMMANDS.cmd_DeviceReset, [2]))
+            .toBe(FOUR_WAY_ACK.ACK_I_INVALID_CHANNEL);
+    });
+
+    it('reports zero motors and still enters passthrough, which is the Betaflight trap', async () => {
+        // `esc4wayInit` returning 0 does not stop msp.c:330-332 from installing
+        // esc4wayProcess, so the FC tells you there are no ESCs and then traps
+        // itself in 4-way anyway. Block 4 should exit rather than give up.
+        const h = rig({ profile: 'betaflight', escCount: 4, motorCount: 0 });
+        await h.open();
+
+        const reply = await msp(h, MSP_COMMANDS.MSP_SET_PASSTHROUGH);
+        expect(Array.from((reply as { payload: Uint8Array }).payload)).toEqual([0]);
+        expect(h.fc.inPassthrough).toBe(true);
+
+        expect(await fourWayAck(h, FOUR_WAY_COMMANDS.cmd_DeviceInitFlash, [0]))
+            .toBe(FOUR_WAY_ACK.ACK_I_INVALID_CHANNEL);
+        // And MSP is gone until cmd_InterfaceExit, so the host cannot re-probe.
+        expect((await msp(h, MSP_COMMANDS.MSP_API_VERSION)).ok).toBe(false);
+    });
+
+    it('reports an ArduPilot analog-PWM board as zero motors while MSP_MOTOR still returns 16 bytes', async () => {
+        // num_motors is built only from digital_mask (AP:1500-1505), so byte 6
+        // can legitimately be 0 on a flying aircraft. MSP_MOTOR still answers
+        // with eight padded slots, which is why it is not a motor count.
+        const h = rig({ profile: 'ardupilot', escCount: 4, motorCount: 0 });
+        h.fc.mavlinkIdleGate = 0;
+        await h.open();
+
+        const config = await msp(h, MSP_COMMANDS.MSP_MOTOR_CONFIG);
+        expect((config as { payload: Uint8Array }).payload[6]).toBe(0);
+
+        const motors = await msp(h, MSP_COMMANDS.MSP_MOTOR);
+        expect((motors as { payload: Uint8Array }).payload).toHaveLength(16);
+    });
+});
+
+describe('SimFc: MSP_BATTERY_STATE', () => {
+    it('lays out the eleven bytes the way both firmwares do', async () => {
+        const h = rig({
+            profile: 'betaflight',
+            battery: { cells: 6, capacityMah: 2200, voltage: 24.6, mahDrawn: 780, current: 12.5 }
+        });
+        await h.open();
+
+        const payload = (await msp(h, MSP_COMMANDS.MSP_BATTERY_STATE) as { payload: Uint8Array }).payload;
+
+        expect(payload).toHaveLength(11);
+        expect(payload[0]).toBe(6);
+        expect(payload[1]! | (payload[2]! << 8)).toBe(2200);
+        expect(payload[3]).toBe(246); // legacy 0.1 V
+        expect(payload[4]! | (payload[5]! << 8)).toBe(780);
+        expect(payload[6]! | (payload[7]! << 8)).toBe(1250); // 0.01 A
+        expect(payload[8]).toBe(0); // OK / healthy
+        expect(payload[9]! | (payload[10]! << 8)).toBe(2460); // 0.01 V
+    });
+
+    it('reports no battery as cell count zero and the not-present state', async () => {
+        const h = rig({ profile: 'betaflight', battery: { cells: 0, voltage: 0 } });
+        await h.open();
+
+        const payload = (await msp(h, MSP_COMMANDS.MSP_BATTERY_STATE) as { payload: Uint8Array }).payload;
+
+        expect(payload[0]).toBe(0);
+        expect(payload[8]).toBe(3); // BATTERY_NOT_PRESENT
     });
 });

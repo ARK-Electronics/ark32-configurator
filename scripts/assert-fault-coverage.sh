@@ -23,15 +23,26 @@ KNOBS=(
     canBlock            # A  -- settings round-trip must preserve 176-183
 )
 
+# The test-side check looks for a suite *named after* the knob -- the plan's
+# words are "one test named after each of the eight fault knobs" -- rather than
+# for the knob's name appearing anywhere in any test file. Block 3 found the
+# looser version passing on two false positives: `canBlock` matched an unrelated
+# local variable in block 1's codec property test, and `mavlinkIdleGate` matched
+# a line of rig setup. Both rows would have stayed green with the knob's real
+# test deleted.
+#
+# This is still only a *presence* check. Nothing here proves a knob does
+# anything; that is what the tests themselves are for, and block 3's note
+# records the mutation results that establish it.
 FAIL=0
 echo "Fault-injection knob coverage"
 for knob in "${KNOBS[@]}"; do
     impl=$(grep -rl "$knob" packages/am32-sim/src --include='*.ts' 2>/dev/null | grep -v '\.test\.ts' | head -1)
-    test_hit=$(grep -rl "$knob" packages --include='*.test.ts' 2>/dev/null | head -1)
+    test_hit=$(grep -rl "describe('fault knob:[^']*${knob}" packages --include='*.test.ts' 2>/dev/null | head -1)
     if [ -z "$impl" ]; then
         printf '  FAIL  %-16s not implemented in am32-sim\n' "$knob"; FAIL=1
     elif [ -z "$test_hit" ]; then
-        printf '  FAIL  %-16s implemented but no test references it\n' "$knob"; FAIL=1
+        printf '  FAIL  %-16s no describe("fault knob: ...%s...") suite\n' "$knob" "$knob"; FAIL=1
     else
         printf '  ok    %-16s %s\n' "$knob" "$test_hit"
     fi

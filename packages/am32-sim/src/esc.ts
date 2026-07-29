@@ -42,16 +42,15 @@ import { EEPROM_SIZE, EepromLayout } from 'am32-core/eeprom/layout';
 import { Mcu } from 'am32-core/mcu';
 import { SOFT_SERIAL_BAUD, wireMs } from 'am32-core/link/timeout-policy';
 
-/** `brSUCCESS` (BL:419-423). */
-export const BR_SUCCESS = 0x30;
-/** `brERRORCOMMAND` (BL:425-429). */
-export const BR_ERROR_COMMAND = 0xC1;
-/** `brERRORCRC` (BL:431-435). */
-export const BR_ERROR_CRC = 0xC2;
-/** The FC's "no byte arrived" sentinel; never on the wire (BFavr:233). */
-export const BR_NONE = 0xFF;
-
-/** How the bootloader answered one operation. */
+/**
+ * How the bootloader answered one operation.
+ *
+ * The raw ACK bytes are `brSUCCESS 0x30` (BL:419-423), `brERRORCOMMAND 0xC1`
+ * (BL:425-429) and `brERRORCRC 0xC2` (BL:431-435); `brERRORVERIFY 0xC0` is
+ * defined but never emitted, because there is no verify support. They are
+ * documented rather than declared: nothing above the FC can observe them, and a
+ * constant nobody reads is worse than a comment.
+ */
 export type EscAck =
     | 'ok'
     /** `brERRORCOMMAND` or `brERRORCRC` -- the ESC said no. */
@@ -73,8 +72,25 @@ export interface EscResult {
     returnedBytes: number
 }
 
-/** Lowest address the bootloader will program: `APPLICATION_ADDRESS` (BL:75-81). */
+/**
+ * Lowest address the bootloader will program, flash-relative:
+ * `FIRMWARE_RELATIVE_START` (BL:75-81). `checkAddressWritable` compares against
+ * `APPLICATION_ADDRESS = MCU_FLASH_START + FIRMWARE_RELATIVE_START` (BL:213).
+ *
+ * **This is 0x4000, not 0x1000, on a `DRONECAN_SUPPORT` build** (BL:77). The
+ * simulator's default ESC is an `ARK_4IN1_F051` with a populated CAN block, so
+ * if ARK ships a DroneCAN build the writable floor here is 12 KiB too low.
+ * Confirm against the ARK firmware before block 6 relies on it; it is a
+ * constructor option for exactly that reason.
+ */
 export const FIRMWARE_START = 0x1000;
+
+/** `ADDRESS_MAGIC_EEPROM` -- resolves to `EEPROM_START_ADD` (BL:220-226, :553-562). */
+export const ADDRESS_MAGIC_EEPROM = 0x0020;
+/** `ADDRESS_MAGIC_FILE_NAME` -- `EEPROM_START_ADD - 32`. */
+export const ADDRESS_MAGIC_FILE_NAME = 0x0021;
+/** `ADDRESS_MAGIC_CONTINUE` -- the end of the previous read, AM32's own answer to 0xFFFF. */
+export const ADDRESS_MAGIC_CONTINUE = 0x0022;
 
 /** AM32's own reply to `CMD_PROG_FLASH` is a `memcmp` verify, so ~1 ms/half-word. */
 const PROG_FLASH_MS = 3;
@@ -319,18 +335,31 @@ export class SimEsc {
      * `CMD_SET_ADDRESS`. Addresses below 1024 that are not one of the three
      * magic values are reserved and rejected (BL:563-566), which is why the
      * 4-way `0xFFFF` "keep the current address" idiom cannot work here: AM32
-     * zeroes the pointer after every read.
+     * zeroes the pointer after every read, and `0xFFFF` makes the FC skip this
+     * command entirely. `ADDRESS_MAGIC_CONTINUE` is AM32's own replacement.
      */
     setAddress (address: number): EscResult {
         const duration = this.wire(SET_ADDRESS_BYTES);
         if (this.unresponsive || !this.connected) {
             return this.dead(duration);
         }
-        if (address < 1024) {
+
+        const resolved = this.resolveAddress(address);
+        if (resolved === null) {
             return this.refused(duration);
         }
-        this.address = address;
+        this.address = resolved;
         return this.ok(duration);
+    }
+
+    /** BL:220-226 and :553-562. Null means "reserved", which is an error reply. */
+    private resolveAddress (address: number): number | null {
+        switch (address) {
+        case ADDRESS_MAGIC_EEPROM: return this.eepromOffset;
+        case ADDRESS_MAGIC_FILE_NAME: return this.eepromOffset - 32;
+        case ADDRESS_MAGIC_CONTINUE: return this.continueAddress;
+        default: return address < 1024 ? null : address;
+        }
     }
 
     /** `CMD_SET_BUFFER`: stage `data` for the next program command. */
@@ -391,8 +420,8 @@ export class SimEsc {
         if (this.unresponsive || !this.connected) {
             return this.dead(duration);
         }
-        // `checkAddressWritable` (BL:511-515) and the even-address/even-length
-        // requirement in `save_flash_nolib` (EE:20-22).
+        // `checkAddressWritable` (BL:443-446, called at :511-515) and the
+        // even-address/even-length requirement in `save_flash_nolib` (EE:20-22).
         if (this.address < FIRMWARE_START || this.address % 2 !== 0 || this.buffer.length % 2 !== 0) {
             return this.refused(duration);
         }
@@ -538,8 +567,9 @@ export class SimEsc {
     }
 
     private writeFirmwareName (name: string): void {
-        // `getInfo` reads the 32 bytes below the EEPROM and stops at the first
-        // NUL, so the name sits at the start of that window (BL:224-226).
+        // The 32 bytes below the EEPROM, which the bootloader addresses as
+        // ADDRESS_MAGIC_FILE_NAME (BL:556-559). The NUL truncation is
+        // configurator-side, in `FourWay.getInfo`.
         const bytes = new Uint8Array(32);
         for (let i = 0; i < name.length && i < 31; i += 1) {
             bytes[i] = name.charCodeAt(i) & 0xFF;

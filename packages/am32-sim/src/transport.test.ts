@@ -10,7 +10,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { Link, LinkError } from 'am32-core/link/link';
-import { DEFAULT_TIMEOUT_POLICY } from 'am32-core/link/timeout-policy';
+import { DEFAULT_TIMEOUT_POLICY, HOST_LINK_BAUD, wireMs } from 'am32-core/link/timeout-policy';
 import { MSP_COMMANDS, encodeMspCommand, isCompleteMspFrame, parseMspResponse } from 'am32-core/framing/msp';
 import {
     FOUR_WAY_ACK,
@@ -20,7 +20,9 @@ import {
     parseFourWayResponse,
     type FourWayResponse
 } from 'am32-core/framing/fourway';
+import { VirtualClock } from 'am32-core/clock';
 import { createSimHarness, type SimHarnessOptions } from './harness';
+import { SimTransport, type SimEndpoint } from './transport';
 import { garbageBytes } from './faults';
 
 const policy = DEFAULT_TIMEOUT_POLICY.withVariant('ardupilot');
@@ -206,5 +208,67 @@ describe('fault knob: link.injectGarbage', () => {
         await h.clock.runAll();
 
         expect(Array.from((await settled) as Uint8Array)).toEqual([0, 1, 42]);
+    });
+});
+
+describe('SimTransport: one wire, one order', () => {
+    /** An endpoint that emits whatever chunks a test hands it, back to back. */
+    class ScriptedEndpoint implements SimEndpoint {
+        private readonly listeners = new Set<(chunk: Uint8Array) => void>();
+        chunks: Uint8Array[] = [];
+
+        receive (): void {
+            for (const chunk of this.chunks) {
+                for (const listener of [...this.listeners]) {
+                    listener(chunk);
+                }
+            }
+        }
+
+        onTx (cb: (chunk: Uint8Array) => void): () => void {
+            this.listeners.add(cb);
+            return () => {
+                this.listeners.delete(cb);
+            };
+        }
+    }
+
+    it('does not let a short reply overtake a long one already on the wire', async () => {
+        // A serial link carries one byte at a time. Scheduling each chunk as
+        // `now + wire(chunk)` independently would deliver a 4-byte frame emitted
+        // just after a 240-byte one *first*, which no UART can do -- and would
+        // hide a reordering bug in whatever is reading.
+        const clock = new VirtualClock();
+        const endpoint = new ScriptedEndpoint();
+        const transport = new SimTransport({ clock, endpoint });
+        await transport.open({ baudRate: 115200 });
+
+        const seen: number[] = [];
+        transport.onData(chunk => seen.push(chunk.length));
+
+        endpoint.chunks = [new Uint8Array(240).fill(1), new Uint8Array(4).fill(2)];
+        await transport.write(new Uint8Array([0x2F]));
+        await clock.runAll();
+
+        expect(seen).toEqual([240, 4]);
+    });
+
+    it('charges each direction its own wire time at the host link rate', async () => {
+        const clock = new VirtualClock();
+        const endpoint = new ScriptedEndpoint();
+        const transport = new SimTransport({ clock, endpoint });
+        await transport.open({ baudRate: 115200 });
+
+        const arrivals: number[] = [];
+        transport.onData(() => arrivals.push(clock.now()));
+
+        // 8 bytes out, then 240 back: wire(8) + wire(240) at 115200.
+        endpoint.chunks = [new Uint8Array(240)];
+        await transport.write(new Uint8Array(8));
+        await clock.runAll();
+
+        const expected = wireMs(8, HOST_LINK_BAUD) + wireMs(240, HOST_LINK_BAUD);
+        expect(arrivals).toEqual([expected]);
+        expect(expected).toBeGreaterThan(20);
     });
 });

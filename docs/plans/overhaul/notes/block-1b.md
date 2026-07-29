@@ -10,6 +10,7 @@ Landed on `master` on top of `1b31d9c`:
 | `41ee527` | `fix(esc): read the layout revision from the ESC's own eeprom byte` |
 | `4622003` | `fix(core): drop unparseable RX bytes instead of buffering them forever` |
 | `f212e65` | `fix(ui): gate the two min-revision-3 fields the codec now hides` |
+| `89ec1ef` | `fix(core): stop a short opaque field from zeroing the bytes after it` |
 | (this file) | the handoff note |
 
 ## Verification
@@ -127,24 +128,32 @@ framing. `McuInfo.layoutSize` is gone.
    either representation for any multi-byte field. `NUMBER_ARRAY_FIELDS` in
    `layout.ts` is the single place that decides.
 
-5. **`encodeSettings` throws unless `base.length === 192`.** That is the guard
+5. **A short multi-byte value is treated differently per field kind.** A short
+   `STARTUP_MELODY` zero-fills to the end of its 128 bytes, because the player
+   stops at a `0,0` pair and that is what the old encoder did. A short opaque
+   blob writes only what it has and leaves the rest of the base image alone,
+   because zero-filling `CAN_SETTINGS` from eight bytes would wipe
+   `can.reserved[8]` at 184-191 -- the bytes this block exists to protect. Both
+   halves have a test; do not unify them.
+
+6. **`encodeSettings` throws unless `base.length === 192`.** That is the guard
    that makes a truncated read impossible to write back. `decodeSettings`, by
    contrast, is tolerant of short buffers (it skips fields that do not fit) —
    that is what makes loading a 48-byte default-config file or an old 184-byte
    dump do the right thing: the fields the file does not contain are left alone
    on the ESC.
 
-6. **`FOUR_WAY_COMMANDS` / `FOUR_WAY_ACK` / `FourWayResponse` are re-exported
+7. **`FOUR_WAY_COMMANDS` / `FOUR_WAY_ACK` / `FourWayResponse` are re-exported
    from `src/communication/four_way.ts`.** Components import them from the app
    facade, not from `am32-core/framing/*`, so block 5's `no-restricted-imports`
    rule will not have to fight `SerialDevice.vue` over them.
 
-7. **`cmd_DeviceVerify = 0x40` was added to the command enum.** Both firmwares
+8. **`cmd_DeviceVerify = 0x40` was added to the command enum.** Both firmwares
    implement it (BF `serial_4way.c:263`, AP `blheli_4way_protocol.h:112`); the
    app's enum stopped at `0x3F`. Nothing calls it yet — block 6's flash verify is
    the obvious first user.
 
-8. **Version gating is now actually on** — see the behaviour changes below.
+9. **Version gating is now actually on** — see the behaviour changes below.
 
 ## Behaviour changes on real hardware (read this before block 4's checkpoint)
 
@@ -287,13 +296,27 @@ Firmware facts worth not re-deriving:
 - **`@am32/serial-msp` is gone; `webserial-wrapper` and `queue` remain** — blocks
   2 and 5.
 - **Three MSP call sites in `SerialDevice.vue` have no `.catch`** (`:607`, `:612`,
-  `:617`, plus the passthrough await at `:623`). Now that an `!` frame and an echo
-  mismatch are rejected instead of being returned as data, a `$M!` reply to
-  `MSP_FC_VARIANT` fails the whole connect where it used to log
-  `Unknown fc type ''` and carry on. No FC in the two trees errors that command,
-  so this is close to theoretical — but block 4's `connect()` is where it gets
-  handled deliberately, and it should surface "passthrough setup failed" rather
-  than an unhandled rejection.
+  `:617`, plus the passthrough await at `:623`, inside a `connectToDevice` that
+  has no outer try/catch). Both diff reviewers raised this; I deliberately did
+  **not** add a `.catch`, and here is the reasoning so block 4 does not have to
+  redo it. The old `MspClient.sendWithPromise` *also* threw on an empty result,
+  so a timeout already aborted connect — that is not a regression. The only real
+  delta is that a `$M!` reply to an informational command now aborts where it
+  used to parse as empty data and log `Unknown fc type ''`. Adding a blanket
+  `.catch(() => null)` would newly swallow *timeouts* too, which is a different
+  and worse behaviour change; catching selectively on `MspFrameError.reason`
+  inside a Vue component is exactly the footgun the session API exists to
+  remove. Block 4's `connect()` should degrade deliberately and surface
+  "passthrough setup failed" as a toast rather than an unhandled rejection.
+  Neither ArduPilot's BLHeli handler (which has no `$M!` path at all, it just
+  goes silent — `AP_BLHeli.cpp:601-604`) nor Betaflight errors these three
+  commands, so nothing reaches this today.
+- **`SerialDevice.vue` imports `decodeSettings`, `parseHex` and `Mcu` straight
+  from `am32-core/*`.** Legal under block 5's planned rule, which restricts only
+  `am32-core/framing/*` and `am32-core/link` — but against its spirit ("only the
+  session and its types are reachable from Vue"). Left alone deliberately: block
+  5 replaces those three call sites with session calls, so a facade added now
+  would be indirection that the same block deletes.
 - Audit items **B**, **C**, **E**, **G**, **H** are untouched by design, and
   `four_way.ts` still carries all of them. See the drift table for where they
   moved to.

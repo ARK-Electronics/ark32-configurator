@@ -219,11 +219,14 @@ export const useEscSession = () => {
      * session's `esc` events as it goes, so the cards update per channel.
      */
     const readAll = async (): Promise<EscResult[]> => {
-        const session = requireSession();
         escStore.escData = [];
         escStore.isLoading = true;
 
         try {
+            // Inside the try, not above it: a click that arrives in the gap
+            // between a disconnect and the store catching up would otherwise
+            // throw straight out of the handler as an unhandled rejection.
+            const session = requireSession();
             const results = await session.enumerate();
             escStore.expectedCount = session.escCount;
 
@@ -253,11 +256,11 @@ export const useEscSession = () => {
      * not an exception.
      */
     const saveDirtySettings = async (): Promise<boolean> => {
-        const session = requireSession();
         escStore.isSaving = true;
         let allWritten = true;
 
         try {
+            const session = requireSession();
             await ensurePassthrough(session);
 
             for (let target = 0; target < escStore.escData.length; target += 1) {
@@ -319,9 +322,8 @@ export const useEscSession = () => {
         targets: number[],
         options: FlashOptions = {}
     ): Promise<boolean> => {
-        const session = requireSession();
-
         try {
+            const session = requireSession();
             await ensurePassthrough(session);
 
             for (const target of targets) {

@@ -288,7 +288,6 @@ export const useEscSession = () => {
             allWritten = false;
         } finally {
             escStore.isSaving = false;
-            escStore.settingsDirty = false;
             escStore.step = '';
         }
 

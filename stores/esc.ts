@@ -20,9 +20,12 @@ export const useEscStore = defineStore('esc', () => {
     const selectedEscInfo = computed(() => escData.value.filter(e => !e.isError && e.data?.isSelected).map(e => e.data) ?? []);
     const firstValidEscData = computed(() => escData.value?.find(d => !d.isError && d.data));
 
-    const settingsDirty = ref(false);
     const isSaving = ref(false);
     const isLoading = ref(false);
+
+    // There was also a store-level `settingsDirty` flag here. It was written in
+    // two places and read in none -- the live one is per ESC, on `McuInfo`. Gone
+    // with the rest of audit item I.
 
     /**
      * The channel a long per-ESC operation is running on, or -1.
@@ -48,7 +51,7 @@ export const useEscStore = defineStore('esc', () => {
         step.value = '';
     };
 
-    return { settingsDirty, isSaving, isLoading, count, expectedCount, escData, selectedEscInfo, firstValidEscData, activeTarget, totalBytes, bytesWritten, step, $reset };
+    return { isSaving, isLoading, count, expectedCount, escData, selectedEscInfo, firstValidEscData, activeTarget, totalBytes, bytesWritten, step, $reset };
 });
 
 if (import.meta.hot) {

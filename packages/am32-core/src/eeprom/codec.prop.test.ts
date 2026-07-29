@@ -141,6 +141,38 @@ describe('audit A: the CAN block survives a save', () => {
     });
 });
 
+describe('the apply-defaults path', () => {
+    it('applies a 48-byte default file without touching the CAN block', () => {
+        // The default eeprom the app fetches from /api/eeprom is 48 bytes --
+        // offsets 0x00..0x2F, everything before `tune`. The old codec decoded
+        // CAN_SETTINGS from that as an empty string and then space-filled bytes
+        // 176-191 with 0x20 on the ESC. This is that whole path.
+        const defaults = Uint8Array.from({ length: 48 }, (_, i) => 0x40 + i);
+        const escImage = image((i) => {
+            if (i === 1) { return 3; }
+            if (i >= CAN_BLOCK.start && i < CAN_BLOCK.end) {
+                return [32, 1, 1, 10, 1, 200, 0, 1][i - CAN_BLOCK.start] as number;
+            }
+            return 0x99;
+        });
+
+        const settings = decodeSettings(defaults, 3);
+        settings.STARTUP_MELODY = new Array(128).fill(0xFF);
+        const encoded = encodeSettings(escImage, settings, 3);
+
+        // The default file's fields landed...
+        expect(encoded[EepromLayout.TIMING_ADVANCE.offset])
+            .toBe(defaults[EepromLayout.TIMING_ADVANCE.offset]);
+        // ...the melody was replaced...
+        expect(encoded[EepromLayout.STARTUP_MELODY.offset]).toBe(0xFF);
+        // ...and everything the file does not describe is the ESC's own.
+        expect(Array.from(encoded.subarray(CAN_BLOCK.start, CAN_RESERVED.end)))
+            .toEqual(Array.from(escImage.subarray(CAN_BLOCK.start, CAN_RESERVED.end)));
+        expect(Array.from(encoded.subarray(RESERVED_EEPROM_3.start, RESERVED_EEPROM_3.end)))
+            .toEqual(Array.from(escImage.subarray(RESERVED_EEPROM_3.start, RESERVED_EEPROM_3.end)));
+    });
+});
+
 describe('decode coverage', () => {
     it('decodes every layout field at revision 3', () => {
         // The round-trip property above cannot catch a field that decode
@@ -215,14 +247,25 @@ describe('codec contracts', () => {
     });
 
     it('accepts either a number[] or a Uint8Array for a byte field', () => {
-        const base = image(0);
+        const base = image(0xEE);
         const fromArray = encodeSettings(base, { CAN_SETTINGS: [1, 2, 3, 4, 5, 6, 7, 8] }, 3);
         const fromTyped = encodeSettings(base, { CAN_SETTINGS: Uint8Array.from([1, 2, 3, 4, 5, 6, 7, 8]) }, 3);
         expect(Array.from(fromArray)).toEqual(Array.from(fromTyped));
-        // Short values zero-pad the rest of the field, as the old encoder did
-        // for the startup melody.
+        // A short opaque blob writes what it has and leaves the rest of the
+        // field as the base image had it -- writing eight CAN bytes must not
+        // wipe can.reserved[8] at 184-191.
         expect(Array.from(fromArray.subarray(CAN_BLOCK.start, CAN_RESERVED.end)))
-            .toEqual([1, 2, 3, 4, 5, 6, 7, 8, 0, 0, 0, 0, 0, 0, 0, 0]);
+            .toEqual([1, 2, 3, 4, 5, 6, 7, 8, 0xEE, 0xEE, 0xEE, 0xEE, 0xEE, 0xEE, 0xEE, 0xEE]);
+    });
+
+    it('zero-fills a short startup melody but not a short CAN block', () => {
+        const base = image(0xEE);
+        const melody = encodeSettings(base, { STARTUP_MELODY: [1, 2, 3, 4] }, 3);
+        const offset = EepromLayout.STARTUP_MELODY.offset;
+        // The melody player stops at a 0,0 pair, so the tail must be zeroed or
+        // the old notes keep playing. This is the legacy encoder's behaviour.
+        expect(Array.from(melody.subarray(offset, offset + 8))).toEqual([1, 2, 3, 4, 0, 0, 0, 0]);
+        expect(melody[offset + 127]).toBe(0);
     });
 
     it('round-trips the startup melody as a plain array', () => {

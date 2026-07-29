@@ -137,6 +137,37 @@ describe('response parsing', () => {
         expect(Array.from(response.params)).toEqual(Array.from(params));
     });
 
+    it('round-trips the 192-byte settings exchange this block introduced', () => {
+        // The settings read went from 184 to 192 bytes (the whole EEprom_t), so
+        // these are the two frames every enumerate and every save now puts on
+        // the wire. Both fit the FCs' 256-param buffers.
+        const params = Array.from({ length: 192 }, (_, i) => (i * 3) & 0xFF);
+
+        const read = encodeFourWayRequest(FOUR_WAY_COMMANDS.cmd_DeviceRead, [192], 0x7C00);
+        expect(Array.from(read)).toEqual([0x2F, 0x3A, 0x7C, 0x00, 0x01, 192, 0x5D, 0x71]);
+
+        const write = encodeFourWayRequest(FOUR_WAY_COMMANDS.cmd_DeviceWrite, params, 0x7C00);
+        expect(write.length).toBe(199);
+        expect(write[4]).toBe(192);
+        expect([write[197], write[198]]).toEqual([0x3E, 0xDF]);
+
+        const response = Uint8Array.from([
+            0x2E, 0x3A, 0x7C, 0x00, 192, ...params, FOUR_WAY_ACK.ACK_OK, 0x4B, 0x05
+        ]);
+        expect(response.length).toBe(200);
+        expect(isCompleteFourWayFrame(response)).toBe(true);
+        expect(Array.from(parseFourWayResponse(response).params)).toEqual(params);
+    });
+
+    it('needs 264 bytes before it will parse a frame claiming 256 params', () => {
+        // The count byte is 0, so a naive length check reads it as "no params"
+        // and parses eight bytes of garbage as a complete frame.
+        const short = new Uint8Array(100);
+        short[0] = 0x2E;
+        short[4] = 0x00;
+        expect(() => parseFourWayResponse(short)).toThrow(/NotEnoughDataError/);
+    });
+
     it('copies the params out of the frame buffer', () => {
         const frame = bytes(0x2E, 0x37, 0x00, 0x00, 0x04, 0x06, 0x1F, 0x33, 0x04, 0x00, 0x11, 0x0C);
         const response = parseFourWayResponse(frame);

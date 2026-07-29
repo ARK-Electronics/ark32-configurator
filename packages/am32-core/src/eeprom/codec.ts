@@ -127,7 +127,16 @@ export function encodeSettings (
             throw new TypeError(`eeprom field ${name} is ${field.size} bytes and must not be a number`);
         }
 
-        for (let i = 0; i < field.size; i += 1) {
+        // A short value zero-fills the rest of a `number[]` field -- that is how
+        // the old encoder terminated a short startup melody, and the melody
+        // player reads a 0,0 pair as the end of the tune. Opaque byte blobs get
+        // the opposite treatment: the tail is left as the base image had it, so
+        // that handing back fewer than 16 bytes of CAN_SETTINGS cannot wipe
+        // `can.reserved[8]` at 184-191.
+        const padded = NUMBER_ARRAY_FIELDS.has(name);
+        const writeLength = padded ? field.size : Math.min(field.size, value.length);
+
+        for (let i = 0; i < writeLength; i += 1) {
             out[field.offset + i] = i < value.length ? ((value[i] as number) & 0xFF) : 0;
         }
     }

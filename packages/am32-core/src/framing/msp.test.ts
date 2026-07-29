@@ -239,6 +239,18 @@ describe('frame completeness probe', () => {
         expect(isCompleteMspFrame(frame)).toBe(true);
     });
 
+    it('is satisfied by the first of two back-to-back frames', () => {
+        // The old probe tested for length equality, so a second frame arriving
+        // in the same chunk left the exchange waiting for a timeout. That is
+        // why this one uses >=.
+        const first = encodeMspV1(MSP_COMMANDS.MSP_API_VERSION, bytes(1), 'response');
+        const second = encodeMspV1(MSP_COMMANDS.MSP_STATUS, bytes(2, 3), 'response');
+        const both = new Uint8Array([...first, ...second]);
+        expect(isCompleteMspFrame(both)).toBe(true);
+        expect(parseMspResponse(both, { expectCommand: MSP_COMMANDS.MSP_STATUS }).command)
+            .toBe(MSP_COMMANDS.MSP_STATUS);
+    });
+
     it('rejects non-MSP bytes', () => {
         expect(isCompleteMspFrame(bytes(0x2E, 0x37, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00))).toBe(false);
         expect(isCompleteMspFrame(bytes(0x24, 0x4E, 0x3E, 0x00, 0x00, 0x00))).toBe(false);

@@ -1,4 +1,4 @@
-import { EEPROM_SIZE } from 'am32-core/eeprom/layout';
+import { EEPROM_SIZE, EepromLayout } from 'am32-core/eeprom/layout';
 import { decodeSettings, encodeSettings } from 'am32-core/eeprom/codec';
 import {
     FOUR_WAY_ACK,
@@ -123,7 +123,11 @@ export class FourWay {
             // EEPROM_SIZE is 192: the whole EEprom_t, not the 184 bytes the old
             // Mcu.LAYOUT_SIZE read, which stopped inside the CAN block.
             const settingsArray = (await this.readAddress(eepromOffset, EEPROM_SIZE))!.params;
-            mcu.getInfo().settings = decodeSettings(settingsArray, settingsArray[1]);
+            // The ESC's own layout revision, not the empty settings object the
+            // old code read it from -- that always came out undefined, which
+            // silently disabled version gating.
+            const layoutRevision = settingsArray[EepromLayout.LAYOUT_REVISION.offset];
+            mcu.getInfo().settings = decodeSettings(settingsArray, layoutRevision);
             mcu.getInfo().settingsBuffer = settingsArray;
 
             const [valid, pin] = Mcu.parseBootLoaderPin(mcu.getInfo().bootloader.input);

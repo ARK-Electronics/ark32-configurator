@@ -239,33 +239,6 @@ while :; do
         agent_exit=$?
         [ "$agent_exit" -eq 124 ] && warn "block timed out after ${BLOCK_TIMEOUT}s"
 
-        # A usage limit that stopped the agent before it did anything is not a
-        # failed attempt: there is nothing to roll back and nothing to learn from
-        # an immediate retry. Burning the attempt budget against it turns "wait
-        # for the window to roll" into "block is stuck" -- exactly what happened
-        # to block 3 on the first overnight run, three attempts in one second.
-        #
-        # The message alone is not sufficient evidence, though. Block 2 hit the
-        # same limit on its *final* message, after 42 minutes of real work that
-        # verified clean and landed correctly. So require both: the limit
-        # message, and a tree identical to where the agent started. If anything
-        # was committed or left uncommitted, the agent did work -- fall through
-        # and let verification judge it on its merits.
-        if grep -qiE "hit your (session|weekly|usage|Opus) limit|usage limit reached" "$log" 2>/dev/null \
-           && [ "$(git rev-parse HEAD)" = "$base" ] \
-           && [ -z "$(git status --porcelain)" ]; then
-            pauses=$((pauses + 1))
-            if [ "$pauses" -gt "$LIMIT_MAX_PAUSES" ]; then
-                warn "usage limit still in effect after $LIMIT_MAX_PAUSES pauses -- giving up"
-                warn "$(head -1 "$log")"
-                break
-            fi
-            warn "usage limit hit: $(head -1 "$log")"
-            warn "waiting ${LIMIT_PAUSE_SEC}s (pause $pauses/$LIMIT_MAX_PAUSES); attempt $attempt not consumed"
-            sleep "$LIMIT_PAUSE_SEC"
-            continue
-        fi
-
         # Sweep up anything the agent left uncommitted, so verification runs
         # against the real tree rather than a half-committed one.
         if [ -n "$(git status --porcelain)" ]; then
@@ -302,6 +275,33 @@ while :; do
         warn "rolling back to $base"
         git reset --hard "$base" >/dev/null
         git clean -fd >/dev/null
+
+        # Verification has already had the final say, so anything reaching here
+        # is a genuine failure. The only question left is whether it should cost
+        # an attempt -- and a usage limit should not. Retrying against an
+        # exhausted window is pointless whether the agent got nowhere (block 3:
+        # three attempts in one second) or got 18 minutes in before the window
+        # closed (block 4, attempt 1).
+        #
+        # Checking this *after* verification rather than before is what makes it
+        # correct. A block that finished its work and only then hit the limit --
+        # block 2 did exactly that, 42 minutes in -- passes verification and
+        # never reaches this branch. An earlier version tested tree state here
+        # instead and could never fire at all, because the driver dirties
+        # STATUS.json itself when it marks the block in-progress.
+        if grep -qiE "hit your (session|weekly|usage|Opus) limit|usage limit reached|approaching your (session|weekly) limit" "$log" 2>/dev/null; then
+            pauses=$((pauses + 1))
+            if [ "$pauses" -gt "$LIMIT_MAX_PAUSES" ]; then
+                warn "usage limit still in effect after $LIMIT_MAX_PAUSES pauses -- giving up"
+                warn "$(head -1 "$log")"
+                break
+            fi
+            warn "usage limit: $(head -1 "$log")"
+            warn "waiting ${LIMIT_PAUSE_SEC}s (pause $pauses/$LIMIT_MAX_PAUSES); attempt $attempt not consumed"
+            sleep "$LIMIT_PAUSE_SEC"
+            continue
+        fi
+
         attempt=$((attempt + 1))
     done
 

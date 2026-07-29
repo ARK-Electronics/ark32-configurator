@@ -11,20 +11,21 @@ Landed on `master` on top of `1b31d9c`:
 | `4622003` | `fix(core): drop unparseable RX bytes instead of buffering them forever` |
 | `f212e65` | `fix(ui): gate the two min-revision-3 fields the codec now hides` |
 | `89ec1ef` | `fix(core): stop a short opaque field from zeroing the bytes after it` |
+| `329ef24`, `d0ab85b` | this note, updated after each of the two diff reviews |
 | (this file) | the handoff note |
 
 ## Verification
 
 ```
-yarn verify                                → exit 0  (lint 0 errors / 23 warnings, typecheck:core + typecheck:app clean, 93 tests in 5 files)
+yarn verify                                → exit 0  (lint 0 errors / 23 warnings, typecheck:core + typecheck:app clean, 100 tests in 5 files)
 bash scripts/assert-deleted.sh             → exit 0  (13 assertions, all clear)
 yarn build                                 → exit 0  (see the block-1a warning about this)
 ./run.sh --no-browser                      → dev server up, GET /configurator 200, vue-tsc 0 errors
 done-when (the four tests from STATUS.json) → exit 0
 ```
 
-Test counts by file: `eeprom/codec.prop.test.ts` 19, `framing/msp.test.ts` 36,
-`framing/fourway.test.ts` 28, `hex.test.ts` 7, `index.test.ts` 3.
+Test counts by file: `eeprom/codec.prop.test.ts` 23, `framing/msp.test.ts` 37,
+`framing/fourway.test.ts` 30, `hex.test.ts` 7, `index.test.ts` 3.
 
 **Lint dropped 27 → 23 warnings, still 0 errors.** Note for whoever keeps the
 count honest: the 27 were *not* all `no-console`. 25 were, plus one

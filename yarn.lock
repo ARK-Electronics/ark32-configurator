@@ -6131,6 +6131,14 @@ __metadata:
   languageName: unknown
   linkType: soft
 
+"am32-sim@workspace:packages/am32-sim":
+  version: 0.0.0-use.local
+  resolution: "am32-sim@workspace:packages/am32-sim"
+  dependencies:
+    am32-core: "workspace:*"
+  languageName: unknown
+  linkType: soft
+
 "am32-web@workspace:packages/am32-web":
   version: 0.0.0-use.local
   resolution: "am32-web@workspace:packages/am32-web"

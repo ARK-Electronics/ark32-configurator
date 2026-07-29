@@ -627,6 +627,20 @@ describe('lifecycle', () => {
         expect(h.fc.inPassthrough).toBe(false);
     });
 
+    it('stops reporting a channel count once passthrough is left', async () => {
+        const h = rig({ profile: 'betaflight', escCount: 4 });
+        await drive(h.clock, h.session.connect());
+
+        expect(await drive(h.clock, h.session.enterPassthrough())).toBe(4);
+        expect(h.session.escCount).toBe(4);
+
+        await drive(h.clock, h.session.exitPassthrough());
+        // The count belonged to that passthrough session. Keeping it would leave
+        // `escCount` reporting channels nobody can address, against what the
+        // getter promises.
+        expect(h.session.escCount).toBe(0);
+    });
+
     it('costs milliseconds of wall time for seconds of protocol time', async () => {
         const h = rig({ profile: 'ardupilot', escCount: 4 });
         await drive(h.clock, h.session.connect());

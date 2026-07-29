@@ -37,7 +37,7 @@
 import { VirtualClock, createSystemClock, type Clock } from './clock';
 import { decodeSettings } from './eeprom/codec';
 import { EEPROM_SIZE, EepromLayout, type EscSettings } from './eeprom/layout';
-import { SessionError, describeError } from './errors';
+import { SessionError, causedBySessionError, describeError } from './errors';
 import {
     SessionEmitter,
     type LogLevel,
@@ -165,6 +165,25 @@ export class Am32Session {
     private fcInfo: FcInfo | null = null;
     private escCountValue = 0;
 
+    /**
+     * Mutex: the tail of the chain of session operations.
+     *
+     * `Link` serialises one *exchange*; this serialises one *sequence of them*,
+     * and the difference is the whole ball game. A 4-way `cmd_DeviceRead` acts on
+     * whichever channel the last `cmd_DeviceInitFlash` selected, so two
+     * overlapping `enumerate()` calls interleave into the link's single FIFO and
+     * steal each other's channel selection -- one run comes back with ESC #0's
+     * EEPROM image filed under target 1, `ok: true`, no error and no warning.
+     * Block 6's `writeSettings` builds its outgoing buffer from that image, so
+     * the same race writes one ESC's settings into another.
+     *
+     * Every public method's guard is a synchronous check before its first
+     * `await`, and `setState` only happens after one resolves. Without this
+     * chain those guards are decorative: a second caller passes them all while
+     * the first is still in flight. Two clicks on a Read button is enough.
+     */
+    private tail: Promise<unknown> = Promise.resolve();
+
     constructor (options: Am32SessionOptions) {
         this.transport = options.transport;
         this.clock = options.clock ?? createSystemClock();
@@ -241,7 +260,11 @@ export class Am32Session {
      * Betaflight is answered on the first frame; ArduPilot pays the MAVLink idle
      * window only when it actually has one to sit out.
      */
-    async connect (): Promise<FcInfo> {
+    connect (): Promise<FcInfo> {
+        return this.exclusive(() => this.connectImpl());
+    }
+
+    private async connectImpl (): Promise<FcInfo> {
         if (this.stateValue === 'disconnected') {
             throw new SessionError('transport', 'session already disconnected; build a new one');
         }
@@ -296,7 +319,11 @@ export class Am32Session {
      * nothing to talk to and only `cmd_InterfaceExit` gets it out. So: exit, log
      * it, and return 0.
      */
-    async enterPassthrough (): Promise<number> {
+    enterPassthrough (): Promise<number> {
+        return this.exclusive(() => this.enterPassthroughImpl());
+    }
+
+    private async enterPassthroughImpl (): Promise<number> {
         this.requireConnected();
 
         if (this.inPassthrough) {
@@ -317,7 +344,7 @@ export class Am32Session {
                 level: 'warn',
                 message: 'the FC reports 0 ESCs but entered passthrough anyway; leaving it'
             });
-            await this.exitPassthrough();
+            await this.exitPassthroughImpl();
             return 0;
         }
 
@@ -332,11 +359,19 @@ export class Am32Session {
     }
 
     /** Leave passthrough. Safe to call when not in it. */
-    async exitPassthrough (): Promise<void> {
+    exitPassthrough (): Promise<void> {
+        return this.exclusive(() => this.exitPassthroughImpl());
+    }
+
+    private async exitPassthroughImpl (): Promise<void> {
         if (!this.inPassthrough) {
             return;
         }
         await this.fourWay.exit();
+        // The count belonged to that passthrough session. Keeping it would leave
+        // `escCount` reporting channels nobody can address, against what the
+        // getter promises.
+        this.escCountValue = 0;
         this.setState('connected');
     }
 
@@ -347,10 +382,14 @@ export class Am32Session {
      * throws only when there is nothing to enumerate: no connection, or
      * passthrough itself refused.
      */
-    async enumerate (): Promise<EscResult[]> {
+    enumerate (): Promise<EscResult[]> {
+        return this.exclusive(() => this.enumerateImpl());
+    }
+
+    private async enumerateImpl (): Promise<EscResult[]> {
         this.requireConnected();
 
-        const count = await this.enterPassthrough();
+        const count = await this.enterPassthroughImpl();
         if (count === 0) {
             return [];
         }
@@ -364,14 +403,17 @@ export class Am32Session {
                 this.emitter.emit('progress', { phase: 'enumerate', current: target, total: count, target });
 
                 try {
-                    const info = await this.readEsc(target);
+                    const info = await this.readEscImpl(target);
                     results.push({ target, ok: true, info });
                     this.emitter.emit('esc', { target, status: 'ok', info });
                 } catch (error) {
+                    // Already prefixed with the channel by `readEscImpl`, so
+                    // every failure names the ESC it belongs to whether it came
+                    // from the init-flash or from a read.
                     const message = describeError(error);
                     results.push({ target, ok: false, error: message });
                     this.emitter.emit('esc', { target, status: 'error', error: message });
-                    this.emitter.emit('log', { level: 'error', message: `ESC #${target + 1}: ${message}` });
+                    this.emitter.emit('log', { level: 'error', message });
                 }
 
                 if (target < count - 1 && this.interEscDelayMs > 0) {
@@ -398,14 +440,36 @@ export class Am32Session {
      * (AM32-bootloader `main.c:517-525`). Block 6 removes it from the app; there
      * was never a reason to reproduce it here.
      */
-    async readEsc (target: number): Promise<McuInfo> {
-        this.requirePassthrough();
+    readEsc (target: number): Promise<McuInfo> {
+        return this.exclusive(() => this.readEscImpl(target));
+    }
 
+    /**
+     * Every failure that comes out of here names its channel, and carries
+     * `SessionError.target`.
+     *
+     * Not cosmetic: `EscResult.error` is the only thing block 5 has to show for a
+     * failed channel, and without this only the init-flash path said which ESC it
+     * meant. A read failure surfaced as a bare
+     * `cmd_DeviceRead failed: no complete response within 500ms`.
+     */
+    private async readEscImpl (target: number): Promise<McuInfo> {
+        this.requirePassthrough();
+        try {
+            return await this.readEscUnlabelled(target);
+        } catch (error) {
+            const inner = causedBySessionError(error);
+            throw new SessionError(
+                inner?.reason ?? 'esc-command',
+                `ESC #${target + 1}: ${describeError(error)}`,
+                { cause: error, target, ack: inner?.ack }
+            );
+        }
+    }
+
+    private async readEscUnlabelled (target: number): Promise<McuInfo> {
         const flash = await this.fourWay.initFlash(target).catch((error: unknown) => {
-            throw new SessionError('esc-init', `ESC #${target + 1} did not enter its bootloader`, {
-                cause: error,
-                target
-            });
+            throw new SessionError('esc-init', 'did not enter its bootloader', { cause: error, target });
         });
 
         const info = createMcuInfo(flash.params);
@@ -419,7 +483,7 @@ export class Am32Session {
         } catch (error) {
             throw new SessionError(
                 'esc-init',
-                `ESC #${target + 1}: unknown MCU signature 0x${info.meta.signature.toString(16).toUpperCase()}`,
+                `unknown MCU signature 0x${info.meta.signature.toString(16).toUpperCase()}`,
                 { cause: error, target }
             );
         }
@@ -459,13 +523,16 @@ export class Am32Session {
     }
 
     /** The decoded settings for one channel. See {@link readEsc} for the image. */
-    async readSettings (target: number): Promise<EscSettings> {
-        const info = await this.readEsc(target);
-        return info.settings;
+    readSettings (target: number): Promise<EscSettings> {
+        return this.exclusive(() => this.readEscImpl(target).then(info => info.settings));
     }
 
     /** `cmd_DeviceReset` -- leave the bootloader and run the application again. */
-    async reset (target: number): Promise<void> {
+    reset (target: number): Promise<void> {
+        return this.exclusive(() => this.resetImpl(target));
+    }
+
+    private async resetImpl (target: number): Promise<void> {
         this.requirePassthrough();
         this.emitter.emit('progress', { phase: 'reset', current: 0, total: 1, target });
         await this.fourWay.reset(target);
@@ -478,13 +545,17 @@ export class Am32Session {
      * Terminal: a disconnected session cannot be reconnected, because the link's
      * RX subscription is gone with it. Build a new one.
      */
-    async disconnect (): Promise<void> {
+    disconnect (): Promise<void> {
+        return this.exclusive(() => this.disconnectImpl());
+    }
+
+    private async disconnectImpl (): Promise<void> {
         if (this.stateValue === 'disconnected') {
             return;
         }
 
         if (this.inPassthrough) {
-            await this.exitPassthrough().catch((error: unknown) => {
+            await this.exitPassthroughImpl().catch((error: unknown) => {
                 this.emitter.emit('log', {
                     level: 'warn',
                     message: `could not leave passthrough cleanly: ${describeError(error)}`
@@ -506,6 +577,24 @@ export class Am32Session {
     }
 
     // ---- internals ---------------------------------------------------------
+
+    /**
+     * Run `work` after every operation queued before it, in call order.
+     *
+     * The same promise-chain shape `Link` uses one layer down, and for the same
+     * reason: overlapping callers become impossible rather than unlikely. The
+     * chain is `.catch`ed after each link so a rejected operation cannot wedge
+     * the queue -- that is the other half of "always settles".
+     *
+     * Public methods take this; the `*Impl` methods they delegate to do not, so
+     * `enumerate` can call `enterPassthroughImpl` without deadlocking on a lock
+     * it already holds.
+     */
+    private exclusive<T> (work: () => Promise<T>): Promise<T> {
+        const result = this.tail.then(work);
+        this.tail = result.then(() => undefined, () => undefined);
+        return result;
+    }
 
     private setState (state: SessionState): void {
         if (state === this.stateValue) {

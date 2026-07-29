@@ -27,9 +27,11 @@ import {
     FOUR_WAY_ACK,
     FOUR_WAY_COMMANDS,
     encodeFourWayRequest,
+    encodeFourWayResponse,
     isCompleteFourWayFrame,
     parseFourWayResponse
 } from 'am32-core/framing/fourway';
+import { EepromLayout } from 'am32-core/eeprom/layout';
 import { FourWaySession } from 'am32-core/esc/fourway-session';
 import { MspSession } from 'am32-core/fc/msp-session';
 import { Am32Session, type EscResult } from 'am32-core/session';
@@ -173,6 +175,22 @@ describe('fault knob: esc[n].unresponsive -- a partial enumerate degrades (audit
         }
         // And the failure was reported, not swallowed.
         expect(h.logs.some(line => line.startsWith('error:') && line.includes('ESC #4'))).toBe(true);
+    });
+
+    it('names the channel on a read failure too, not just an init-flash failure', async () => {
+        // `EscResult.error` is the only thing block 5 has to show for a failed
+        // channel. A read failure used to surface as a bare
+        // "cmd_DeviceRead failed: no complete response within 500ms", with
+        // nothing saying which ESC it belonged to.
+        const h = rig({ profile: 'betaflight', escCount: 3 });
+        (h.escs[1] as { shortRead: boolean }).shortRead = true;
+
+        await drive(h.clock, h.session.connect());
+        const results = await drive(h.clock, h.session.enumerate());
+
+        expect(okTargets(results)).toEqual([0, 2]);
+        expect(results[1]?.error).toMatch(/^ESC #2: /);
+        expect(results[1]?.error).toMatch(/cmd_DeviceRead/);
     });
 
     it('survives the first channel failing, not just the last', async () => {
@@ -498,6 +516,94 @@ describe('passthrough that reports zero ESCs', () => {
 
         expect(results).toEqual([]);
         expect(h.fc.inPassthrough).toBe(false);
+    });
+});
+
+describe('two callers at once', () => {
+    it('serialises overlapping enumerates instead of interleaving their channel selection', async () => {
+        // `Link` serialises one *exchange*; without a session-level mutex two
+        // `enumerate()` calls interleave into that single FIFO and steal each
+        // other's `cmd_DeviceInitFlash`, because a `cmd_DeviceRead` acts on
+        // whichever channel was selected last. The result is not an error -- it
+        // is one run reporting another ESC's EEPROM image as `ok: true`, which
+        // block 6's writeSettings would then write back to the wrong ESC.
+        //
+        // Two clicks on block 5's Read button is enough to produce it.
+        const h = rig({ profile: 'ardupilot', escCount: 4 });
+        h.escs.forEach((esc, i) => {
+            esc.poke(esc.eepromOffset + EepromLayout.BOOT_LOADER_REVISION.offset, [10 + i]);
+        });
+        await drive(h.clock, h.session.connect());
+
+        const first = h.session.enumerate();
+        // Let the first run get past the passthrough settle and into its ESC
+        // loop, which is where the interleaving does its damage.
+        await h.clock.advance(2500);
+        const second = h.session.enumerate();
+
+        const [a, b] = await drive(h.clock, Promise.all([first, second]));
+
+        for (const results of [a, b]) {
+            expect(okTargets(results)).toEqual([0, 1, 2, 3]);
+            // Each ESC carries a distinguishable byte, so a swapped image shows
+            // up here rather than passing silently.
+            expect(results.map(r => r.info?.settings.BOOT_LOADER_REVISION)).toEqual([10, 11, 12, 13]);
+        }
+    });
+
+    it('does not send MSP_SET_PASSTHROUGH twice when two callers race into it', async () => {
+        const h = rig({ profile: 'ardupilot', escCount: 4 });
+        h.fc.mavlinkIdleGate = 0;
+        await drive(h.clock, h.session.connect());
+
+        const before = h.fc.counts.msp;
+        const [x, y] = await drive(h.clock, Promise.all([
+            h.session.enterPassthrough(),
+            h.session.enterPassthrough()
+        ]));
+
+        expect([x, y]).toEqual([4, 4]);
+        // The second caller found the session already in passthrough and sent
+        // nothing. On ArduPilot the alternative is worse than wasteful: a second
+        // MSP frame arriving in passthrough leaves 4-way and disconnects
+        // everything.
+        expect(h.fc.counts.msp - before).toBe(1);
+        expect(h.fc.inPassthrough).toBe(true);
+    });
+});
+
+describe('a 4-way reply must echo the command it answers', () => {
+    it('rejects a frame left over from an earlier exchange, then recovers', async () => {
+        const h = createSimHarness({ profile: 'ardupilot', escCount: 1 });
+        const link = new Link(h.transport, { clock: h.clock });
+        const policy = DEFAULT_TIMEOUT_POLICY.withVariant('ardupilot');
+        const msp = new MspSession({ link, clock: h.clock, policy });
+        const fourWay = new FourWaySession({ link, policy, retries: 2, initRetries: 2 });
+        h.fc.mavlinkIdleGate = 0;
+        await h.open();
+        await drive(h.clock, msp.enterPassthrough());
+        await drive(h.clock, fourWay.initFlash(0));
+
+        // A complete, CRC-valid reply to a *different* command, arriving ahead of
+        // the real one -- the shape a reply left behind by an exchange that gave
+        // up has when it lands after the next drain's quiet window.
+        const stale = encodeFourWayResponse(
+            FOUR_WAY_COMMANDS.cmd_DeviceRead,
+            [0xAB, 0xAB, 0xAB, 0xAB],
+            FOUR_WAY_ACK.ACK_OK
+        );
+        h.transport.faults.injectGarbage(stale, { direction: 'rx' });
+
+        const response = await drive(h.clock, fourWay.command(FOUR_WAY_COMMANDS.cmd_InterfaceTestAlive, {
+            retries: 2
+        }));
+
+        // Without the echo check the stale ACK_OK frame is accepted and this is
+        // cmd_DeviceRead. With it, the attempt is rejected, the link drains, and
+        // the retry gets the real answer -- retry-on-bad-data for free, which is
+        // the whole reason the check belongs in `validate`.
+        expect(response.command).toBe(FOUR_WAY_COMMANDS.cmd_InterfaceTestAlive);
+        expect(link.stats.drains).toBeGreaterThan(0);
     });
 });
 

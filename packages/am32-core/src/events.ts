@@ -94,7 +94,14 @@ export class SessionEmitter {
         };
     }
 
-    /** Drop every listener. Called by `Am32Session.disconnect`. */
+    /**
+     * Drop every listener.
+     *
+     * Deliberately **not** called by `Am32Session.disconnect`: doing so would
+     * swallow the final `state` event, which is the one a client most needs.
+     * Subscribers own their unsubscribe functions; this is for a client tearing
+     * everything down at once.
+     */
     clear (): void {
         this.listeners.clear();
     }

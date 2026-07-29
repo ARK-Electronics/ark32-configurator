@@ -115,6 +115,33 @@ export class FourWaySession {
                         const decoded = parseFourWayResponse(response);
                         captured.ack = decoded.ack;
 
+                        // Command echo, the 4-way half of the check block 1b
+                        // added for MSP (audit **D**: "whatever frame arrives is
+                        // returned as the answer to whatever was just sent").
+                        // Both firmwares echo the command they read
+                        // (AP_BLHeli.cpp:610-623, serial_4way.c:896-919).
+                        //
+                        // What it guards: an exchange that gives up after its
+                        // attempts can leave a reply in flight, and a stale frame
+                        // that lands after the next drain's quiet window
+                        // satisfies the next probe. Without this, a leftover
+                        // ACK_OK `cmd_DeviceRead` reply is accepted as
+                        // `cmd_DeviceInitFlash`'s device info and `createMcuInfo`
+                        // builds an MCU signature out of EEPROM bytes.
+                        //
+                        // The *address* is deliberately not checked: ArduPilot
+                        // forces `cmd_DevicePageErase`'s echoed address to 0x0000
+                        // (AP:1122) where Betaflight echoes the computed one
+                        // (BF:675-680), so an address check would be wrong on one
+                        // firmware or the other.
+                        if (decoded.command !== command) {
+                            throw new SessionError(
+                                'esc-command',
+                                `${label}: reply echoes command 0x${decoded.command.toString(16)}, not ` +
+                                `0x${command.toString(16)} -- a frame left over from an earlier exchange`
+                            );
+                        }
+
                         if (decoded.ack !== FOUR_WAY_ACK.ACK_OK) {
                             throw new SessionError(
                                 'esc-command',

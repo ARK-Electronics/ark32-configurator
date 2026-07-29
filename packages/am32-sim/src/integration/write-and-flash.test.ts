@@ -324,6 +324,21 @@ describe('Am32Session.flash', () => {
         expect(firstEsc(h).eeprom[EepromLayout.BOOT_BYTE.offset]).toBe(0x01);
     });
 
+    it('still flashes an ESC whose own name does not read back', async () => {
+        // A fresh or half-flashed board has no name to compare against -- and it is
+        // exactly the board that needs flashing, so the check has to step aside
+        // rather than lock it out. The app did this by accident, via a truthiness
+        // guard; here it is deliberate, and it says which channel it did it for.
+        const h = await inPassthrough({ escs: [new SimEsc({ firmwareName: '' })] });
+
+        const info = await drive(h.clock, h.session.flash(0, firmwareHex({ name: 'AM32_ANY_BOARD_F051' })));
+
+        expect(info.settings.BOOT_BYTE).toBe(0x01);
+        expect(h.logs.some(line =>
+            line.startsWith('warn:') && line.includes('ESC #1') && line.includes('no firmware name')
+        )).toBe(true);
+    });
+
     it('rejects a hex for a different MCU family', async () => {
         const h = await inPassthrough();
 

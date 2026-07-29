@@ -23,6 +23,17 @@ export const useEscStore = defineStore('esc', () => {
     const isSaving = ref(false);
     const isLoading = ref(false);
 
+    /**
+     * True while any session operation is in flight -- connect, read, save or
+     * flash.
+     *
+     * Written only by `useEscSession`'s `exclusive()` wrapper, and read by the
+     * buttons so a second click is impossible rather than merely refused. Two
+     * Connect clicks used to orphan an open port; a Read during a Save used to
+     * truncate the save loop silently.
+     */
+    const isBusy = ref(false);
+
     // There was also a store-level `settingsDirty` flag here. It was written in
     // two places and read in none -- the live one is per ESC, on `McuInfo`. Gone
     // with the rest of audit item I.
@@ -51,7 +62,7 @@ export const useEscStore = defineStore('esc', () => {
         step.value = '';
     };
 
-    return { isSaving, isLoading, count, expectedCount, escData, selectedEscInfo, firstValidEscData, activeTarget, totalBytes, bytesWritten, step, $reset };
+    return { isBusy, isSaving, isLoading, count, expectedCount, escData, selectedEscInfo, firstValidEscData, activeTarget, totalBytes, bytesWritten, step, $reset };
 });
 
 if (import.meta.hot) {

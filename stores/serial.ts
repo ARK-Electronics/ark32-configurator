@@ -32,12 +32,10 @@ export const useSerialStore = defineStore('serial', () => {
         label: 'Select device'
     });
 
-    /**
-     * The port the user picked, kept only so the UI can tell whether one is
-     * chosen. The reader and the writer belong to the transport for the lifetime
-     * of the connection.
-     */
-    const port = ref<SerialPort | null>(null);
+    // No port handle here. The transport owns the reader, the writer and the port
+    // for the lifetime of a connection, and `selectedDevice` is what the UI needs
+    // to know. A stored `port` would be another write-only field of exactly the
+    // kind audit item I is about.
 
     /** What `connect()` found. Null until then. */
     const fc = ref<FcInfo | null>(null);
@@ -64,11 +62,10 @@ export const useSerialStore = defineStore('serial', () => {
     function $reset () {
         hasConnection.value = false;
         isFourWay.value = false;
-        port.value = null;
         fc.value = null;
     }
 
-    return { fc, motorCount, isFourWay, hasConnection, hasSerial, addSerialDevices, selectLastDevice, pairedDevices, pairedDevicesOptions, selectedDevice, port, $reset };
+    return { fc, motorCount, isFourWay, hasConnection, hasSerial, addSerialDevices, selectLastDevice, pairedDevices, pairedDevicesOptions, selectedDevice, $reset };
 });
 
 export type SerialStore = ReturnType<typeof useSerialStore>

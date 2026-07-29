@@ -14,7 +14,7 @@
         <UButton size="2xs" @click="requestSerialDevices">
           Port select
         </UButton>
-        <UButton v-if="!serialStore.hasConnection" :disabled="serialStore.selectedDevice.id === '-1'" size="2xs" @click="connectToDevice">
+        <UButton v-if="!serialStore.hasConnection" :disabled="serialStore.selectedDevice.id === '-1' || escStore.isBusy" :loading="escStore.isBusy" size="2xs" @click="connectToDevice">
           Connect
         </UButton>
         <UButton v-else size="2xs" color="red" @click="disconnectFromDevice">
@@ -47,14 +47,14 @@
             </UChip>
           </div>
           <div class="flex gap-2">
-            <UButton icon="i-material-symbols-find-in-page-outline" size="2xs" :loading="escStore.isLoading" @click="connectToEsc">
+            <UButton icon="i-material-symbols-find-in-page-outline" size="2xs" :loading="escStore.isLoading" :disabled="escStore.isBusy" @click="connectToEsc">
               Read
             </UButton>
             <UButton
               icon="i-material-symbols-save"
               color="blue"
               size="2xs"
-              :disabled="!isAnySettingsDirty || escStore.isSaving"
+              :disabled="!isAnySettingsDirty || escStore.isSaving || escStore.isBusy"
               :loading="escStore.isSaving"
               @click="writeConfig"
             >
@@ -208,13 +208,18 @@
               <div v-if="escStore.activeTarget === -1" class="flex gap-4">
                 <UButton
                   label="Start flash"
+                  :loading="downloading"
                   :disabled="
-                    (savingOrApplyingSelectedEscs.length === 0) ||
+                    escStore.isBusy || downloading ||
+                      (savingOrApplyingSelectedEscs.length === 0) ||
                       (currentTab === 0 && (!selectedAsset || selectedAsset === 'NOT FOUND')) ||
                       (currentTab > 0 && !fileInput)
                   "
                   @click="startModalFlash"
                 />
+              </div>
+              <div v-if="downloading" class="text-green-500">
+                {{ escStore.step }}
               </div>
               <div v-if="escStore.activeTarget > -1" class="w-full">
                 Flashing ESC #{{ (escStore.activeTarget + 1) }}
@@ -265,7 +270,7 @@
           </div>
           <template #footer>
             <div class="text-right">
-              <UButton color="green" label="Apply" :disabled="savingOrApplyingSelectedEscs.length === 0" @click="applyDefaultConfig" />
+              <UButton color="green" label="Apply" :disabled="savingOrApplyingSelectedEscs.length === 0 || escStore.isBusy" @click="applyDefaultConfig" />
             </div>
           </template>
         </UCard>
@@ -344,7 +349,7 @@
           </div>
           <template #footer>
             <div class="text-right">
-              <UButton label="Apply" :disabled="savingOrApplyingSelectedEscs.length === 0 || applyConfigFile?.input.files.length === 0" @click="applyConfig" />
+              <UButton label="Apply" :disabled="savingOrApplyingSelectedEscs.length === 0 || escStore.isBusy || applyConfigFile?.input.files.length === 0" @click="applyConfig" />
             </div>
           </template>
         </UCard>
@@ -388,6 +393,15 @@ const ignoreMcuLayout = ref(false);
 const includePrerelease = ref(false);
 const savingOrApplyingSelectedEscs = ref<number[]>([]);
 const isFlashingActive = computed(() => escStore.activeTarget > -1);
+/**
+ * True while a release hex is being fetched.
+ *
+ * The old code faked this by setting `escStore.activeTarget = 0` before the fetch,
+ * which locked the modal shut -- and left it locked for good if the download
+ * failed. A download is cancellable; what it must not allow is a second Start
+ * flash click, which is what this disables.
+ */
+const downloading = ref(false);
 
 const progressIsIntermediate = computed(() => !['Writing', 'Verifying'].includes(escStore.step));
 
@@ -618,10 +632,12 @@ const startModalFlash = async () => {
             return;
         }
 
-        escStore.step = 'Downloading';
+        downloading.value = true;
+        escStore.step = 'Downloading firmware';
         try {
             const cached = await db.downloads.where('url').equals(url).first();
             if (cached) {
+                downloading.value = false;
                 await startFlash(cached.text);
                 return;
             }
@@ -632,12 +648,16 @@ const startModalFlash = async () => {
         } catch (error: any) {
             // A download that fails must not leave the modal locked, which is the
             // same defect as audit item G one step earlier in the path.
-            escStore.step = '';
             toast.add({
                 title: 'Download failed',
                 color: 'red',
                 description: error.message
             });
+        } finally {
+            downloading.value = false;
+            if (escStore.activeTarget === -1) {
+                escStore.step = '';
+            }
         }
     } else if (currentTab.value === 1 && fileInput.value) {
         await startFlash(await fileInput.value.text());

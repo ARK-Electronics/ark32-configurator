@@ -37,14 +37,28 @@ import type { EscData } from 'am32-core/mcu';
 import { WebSerialTransport } from 'am32-web';
 
 /**
- * The live session, outside the composable so every caller shares one.
+ * The live session, its store subscriptions, and the operation in flight.
  *
- * A holder rather than a bare `let` so the closures below always see the current
- * value. There is deliberately at most one: a `SerialPort` can only be opened
- * once, and two sessions over one port would each have their own mutex, which is
- * the race `Am32Session.exclusive` exists to prevent.
+ * A holder rather than three bare `let`s so the closures below always see the
+ * current values. There is deliberately at most one session: a `SerialPort` can be
+ * opened once, and two sessions over one port would each have their own mutex,
+ * which is the race `Am32Session`'s own `exclusive()` exists to prevent.
+ *
+ * `operation` is the second half of that. `Am32Session` serialises what reaches
+ * the wire, but a UI operation is more than its exchanges -- it clears `escData`,
+ * marks cards, sets progress fields -- and two of those interleaving corrupts the
+ * *store* even though the wire stays orderly. Two Connect clicks used to leave an
+ * orphaned open port that only a page reload recovered from; a Read during a Save
+ * used to truncate the save loop silently, because the loop re-read
+ * `escStore.escData.length` after the read had emptied it.
  */
-const live: { session: Am32Session | null } = { session: null };
+const live: {
+    session: Am32Session | null
+    /** `session.on()` unsubscribe handles, so a dead session stops writing. */
+    off: (() => void)[]
+    /** Settles when the operation in flight finishes. Null when idle. */
+    operation: Promise<void> | null
+} = { session: null, off: [], operation: null };
 
 /** What the flash modal shows while each phase runs. */
 const PHASE_LABELS: Record<ProgressEvent['phase'], string> = {
@@ -95,7 +109,9 @@ export const useEscSession = () => {
     };
 
     const mirror = (session: Am32Session) => {
-        session.on('log', (event) => {
+        live.off = [];
+
+        live.off.push(session.on('log', (event) => {
             if (event.level === 'error') {
                 logStore.logError(event.message);
             } else if (event.level === 'warn') {
@@ -103,27 +119,27 @@ export const useEscSession = () => {
             } else {
                 logStore.log(event.message);
             }
-        });
+        }));
 
         // The store's two connection flags are derived from the session's state
         // rather than set by hand at each call site, which is what kept them
         // disagreeing with the wire before: `isFourWay` was set true *before*
         // MSP_SET_PASSTHROUGH was known to have worked.
-        session.on('state', (event) => {
+        live.off.push(session.on('state', (event) => {
             serialStore.hasConnection = ['connected', 'passthrough', 'enumerating'].includes(event.state);
             serialStore.isFourWay = event.state === 'passthrough' || event.state === 'enumerating';
-        });
+        }));
 
-        session.on('esc', (event) => {
+        live.off.push(session.on('esc', (event) => {
             const entry = escEntry(event.target);
             entry.isLoading = event.status === 'reading';
             entry.isError = event.status === 'error';
             if (event.info) {
                 entry.data = event.info;
             }
-        });
+        }));
 
-        session.on('progress', (event) => {
+        live.off.push(session.on('progress', (event) => {
             escStore.step = PHASE_LABELS[event.phase];
             if (event.phase === 'flash') {
                 escStore.totalBytes = event.total;
@@ -132,7 +148,47 @@ export const useEscSession = () => {
             if (event.target !== undefined && PER_TARGET_PHASES.includes(event.phase)) {
                 escStore.activeTarget = event.target;
             }
-        });
+        }));
+    };
+
+    /** Stop a session writing to the stores, and forget its subscriptions. */
+    const unmirror = () => {
+        for (const off of live.off) {
+            off();
+        }
+        live.off = [];
+    };
+
+    /**
+     * Run one UI operation, or refuse it if another is already running.
+     *
+     * The same promise-chain shape `Am32Session` and `Link` use further down, and
+     * for the same reason: overlapping callers become impossible rather than
+     * unlikely. `escStore.isBusy` is the store mirror of it, so the buttons are
+     * disabled rather than relying on the user not double-clicking.
+     *
+     * The clean-up handler is registered on `work()`'s promise **before** the
+     * caller's `await` is, so the flag is already clear when the caller resumes --
+     * otherwise `startFlash`'s re-read straight after a flash would refuse itself.
+     */
+    const exclusive = <T>(what: string, work: () => Promise<T>, refused: () => T): Promise<T> => {
+        if (live.operation) {
+            toast.add({
+                title: 'Busy',
+                color: 'orange',
+                description: `Another operation is still running; ${what} was not started.`
+            });
+            return Promise.resolve(refused());
+        }
+
+        escStore.isBusy = true;
+        const attempt = work();
+        const finish = () => {
+            live.operation = null;
+            escStore.isBusy = false;
+        };
+        live.operation = attempt.then(finish, finish);
+        return attempt;
     };
 
     /**
@@ -142,7 +198,10 @@ export const useEscSession = () => {
      * waits out ArduPilot's MAVLink window if it has to -- the 4.5 s the app used
      * to pay on every connect, Betaflight included, was audit item **H**.
      */
-    const connect = async (port: SerialPort, baudRate: number): Promise<boolean> => {
+    const connect = (port: SerialPort, baudRate: number): Promise<boolean> =>
+        exclusive('the connect', () => connectImpl(port, baudRate), () => false);
+
+    const connectImpl = async (port: SerialPort, baudRate: number): Promise<boolean> => {
         await disconnect({ quiet: true });
 
         const transport = new WebSerialTransport(port, {
@@ -156,17 +215,24 @@ export const useEscSession = () => {
         live.session = session;
 
         try {
-            const fc = await session.connect();
-            serialStore.fc = fc;
-            serialStore.port = port;
+            serialStore.fc = await session.connect();
             return true;
         } catch (error) {
             // Leaving the port open would make every retry fail with "already in
             // use" until the tab is reloaded, so the failed session has to let go
             // of it before we drop the reference.
             await session.disconnect().catch(() => undefined);
-            live.session = null;
-            serialStore.$reset();
+
+            // Only clear the holder if it is still ours. Belt and braces next to
+            // `exclusive()`: clearing it unconditionally is how a second connect
+            // could orphan a *working* first one -- open port, live read loop,
+            // `hasConnection` true, and nothing holding the session, so not even
+            // Disconnect could close it.
+            if (live.session === session) {
+                live.session = null;
+                unmirror();
+                serialStore.$reset();
+            }
 
             if (error instanceof SessionError && error.reason === 'transport') {
                 surface('Error', error);
@@ -183,7 +249,12 @@ export const useEscSession = () => {
         }
     };
 
-    /** Leave passthrough, close the port and clear the stores. Safe to repeat. */
+    /**
+     * Leave passthrough, close the port and clear the stores. Safe to repeat.
+     *
+     * Deliberately **not** behind `exclusive()`: it is the escape hatch, and the
+     * session serialises the exit behind whatever is in flight anyway.
+     */
     const disconnect = async (options: { quiet?: boolean } = {}): Promise<void> => {
         const session = live.session;
         live.session = null;
@@ -192,6 +263,11 @@ export const useEscSession = () => {
             await session.disconnect().catch((error: unknown) => {
                 logStore.logError(`Disconnect: ${message(error)}`);
             });
+            // After the await, not before: `disconnect()` emits the final `state`
+            // event and that is the one a client most needs. It is also why
+            // `SessionEmitter.clear()` is not called by the session itself -- see
+            // block 4's note.
+            unmirror();
         }
 
         serialStore.$reset();
@@ -218,7 +294,10 @@ export const useEscSession = () => {
      * handler and took the other three with it. The store is filled by the
      * session's `esc` events as it goes, so the cards update per channel.
      */
-    const readAll = async (): Promise<EscResult[]> => {
+    const readAll = (): Promise<EscResult[]> =>
+        exclusive('the read', readAllImpl, () => []);
+
+    const readAllImpl = async (): Promise<EscResult[]> => {
         escStore.escData = [];
         escStore.isLoading = true;
 
@@ -255,7 +334,10 @@ export const useEscSession = () => {
      * `enumerate` does: a four-ESC board with one bad channel is a normal state,
      * not an exception.
      */
-    const saveDirtySettings = async (): Promise<boolean> => {
+    const saveDirtySettings = (): Promise<boolean> =>
+        exclusive('the save', saveDirtySettingsImpl, () => false);
+
+    const saveDirtySettingsImpl = async (): Promise<boolean> => {
         escStore.isSaving = true;
         let allWritten = true;
 
@@ -263,12 +345,16 @@ export const useEscSession = () => {
             const session = requireSession();
             await ensurePassthrough(session);
 
-            for (let target = 0; target < escStore.escData.length; target += 1) {
-                const entry = escStore.escData[target];
-                if (entry.isError || !entry.data?.settingsDirty) {
-                    continue;
-                }
+            // Snapshot the work list. Re-reading `escStore.escData.length` each
+            // iteration meant anything that emptied the array mid-save silently
+            // truncated the loop -- the remaining ESCs were never written and
+            // nothing reported it. `exclusive()` stops that from happening at all
+            // now; this makes the loop robust rather than merely unreachable.
+            const dirty = escStore.escData
+                .map((entry, target) => ({ entry, target }))
+                .filter(({ entry }) => !entry.isError && entry.data?.settingsDirty);
 
+            for (const { entry, target } of dirty) {
                 try {
                     const result = await session.writeSettings(target, entry.data.settings);
                     // The image the session sent, which is what a later write
@@ -294,12 +380,26 @@ export const useEscSession = () => {
         return allWritten;
     };
 
-    /** Stage `settings` on the given one-based ESC numbers, then write them. */
+    /**
+     * Stage `settings` on the given one-based ESC numbers, then write them.
+     *
+     * **`CAN_SETTINGS` is dropped on the way in.** Those bytes are per-ESC identity
+     * -- `can_node` and `esc_index` among them -- not a tunable, and the
+     * configurator has no editor for them. Copying one ESC's saved config onto all
+     * four would otherwise give an ARK DroneCAN board four ESCs with the same node
+     * ID. `writeSettings` leaves a field the patch omits exactly as the ESC had it,
+     * so dropping it here is the whole fix, and `downloadEscConfig` still saves all
+     * 192 bytes so nothing is lost from the file.
+     */
     const applySettings = async (settings: EscSettings, escNumbers: number[]): Promise<boolean> => {
+        const portable = Object.fromEntries(
+            Object.entries(settings).filter(([field]) => field !== 'CAN_SETTINGS')
+        ) as EscSettings;
+
         for (const n of escNumbers) {
             const entry = escStore.escData[n - 1];
             if (entry?.data) {
-                entry.data.settings = { ...settings };
+                entry.data.settings = { ...portable };
                 entry.data.settingsDirty = true;
             }
         }
@@ -316,10 +416,17 @@ export const useEscSession = () => {
      * than in the component makes it an invariant of the operation ("nothing is in
      * flight") instead of one call site's manners.
      */
-    const flashTargets = async (
+    const flashTargets = (
         hex: string,
         targets: number[],
         options: FlashOptions = {}
+    ): Promise<boolean> =>
+        exclusive('the flash', () => flashTargetsImpl(hex, targets, options), () => false);
+
+    const flashTargetsImpl = async (
+        hex: string,
+        targets: number[],
+        options: FlashOptions
     ): Promise<boolean> => {
         try {
             const session = requireSession();

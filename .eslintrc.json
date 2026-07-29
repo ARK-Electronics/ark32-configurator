@@ -40,7 +40,17 @@
             "files": ["composables/**/*.ts"],
             "rules": {
                 "no-restricted-imports": ["error", {
+                    "paths": [
+                        {
+                            "name": "am32-core",
+                            "message": "issue #3 section 7.2: import from 'am32-core/session'. The barrel re-exports Link and every framing helper. A matching override replaces this rule rather than merging with it, so the barrel has to be named here too."
+                        }
+                    ],
                     "patterns": [
+                        {
+                            "group": ["am32-sim", "am32-sim/*"],
+                            "message": "issue #3 section 7.2: the simulator is not aliased in nuxt.config.ts and must never reach the client bundle. It is a peer of am32-web for the CLI and the test suite, not for the app."
+                        },
                         {
                             "group": ["am32-core/framing", "am32-core/framing/*"],
                             "message": "issue #3 section 7.2: the client boundary may construct a transport and a session, but framing belongs in am32-core. If this file needs a frame, the code does not belong here."

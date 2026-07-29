@@ -7,10 +7,12 @@
 type LogMessageType = undefined | null | 'warning' | 'error'
 type LogMessage = [Date, string, LogMessageType]
 
-// `MspData`, `LogFn` and `PromiseFn` lived here for the app's own protocol
-// classes. Block 5 deleted those: what the FC reported is `FcInfo` from
-// `am32-core/session` now, produced by the same code the CLI runs, and the
-// callback types belonged to the command queue (audit item I).
+// Three types lived here for the app's own protocol classes: the MSP facts the
+// FC reported, a log-callback alias and a promise-callback alias. Block 5 deleted
+// all three with those classes (audit item I) -- what the FC reported is `FcInfo`
+// from `am32-core/session` now, produced by the same code the CLI runs. The
+// removed names are listed in `scripts/assert-deleted.sh`, which greps this file
+// for them.
 
 type SettingsType = 'select' | 'bool' | 'string' | 'number' | 'rtttl';
 type SettingsSelectOptionsType = { label: string, value: number };

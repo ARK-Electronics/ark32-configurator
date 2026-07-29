@@ -7,5 +7,51 @@
         "no-console": "warn",
         "no-use-before-define": "warn",
         "no-useless-constructor": "warn"
-    }
+    },
+    "overrides": [
+        {
+            "files": ["components/**/*.vue", "components/**/*.ts", "pages/**/*.vue", "pages/**/*.ts"],
+            "rules": {
+                "no-restricted-imports": ["error", {
+                    "paths": [
+                        {
+                            "name": "am32-core",
+                            "message": "issue #3 section 7.2: import from 'am32-core/session' instead. The barrel re-exports the link and framing layers, so allowing it would be a rule with a hole in it. Type-only modules (am32-core/mcu, am32-core/eeprom/layout) stay reachable."
+                        }
+                    ],
+                    "patterns": [
+                        {
+                            "group": ["am32-core/framing", "am32-core/framing/*"],
+                            "message": "issue #3 section 7.2: MSP and 4-way framing live below the session layer. Reach the wire through Am32Session, via useEscSession()."
+                        },
+                        {
+                            "group": ["am32-core/link", "am32-core/link/*"],
+                            "message": "issue #3 section 7.2: the link layer, its retries and its timeout policy live below the session layer. Reach the wire through Am32Session, via useEscSession()."
+                        },
+                        {
+                            "group": ["am32-web", "am32-web/*", "am32-sim", "am32-sim/*"],
+                            "message": "issue #3 section 7.2: transports are constructed once, in composables/useEscSession.ts. A component must not know which transport it is on."
+                        }
+                    ]
+                }]
+            }
+        },
+        {
+            "files": ["composables/**/*.ts"],
+            "rules": {
+                "no-restricted-imports": ["error", {
+                    "patterns": [
+                        {
+                            "group": ["am32-core/framing", "am32-core/framing/*"],
+                            "message": "issue #3 section 7.2: the client boundary may construct a transport and a session, but framing belongs in am32-core. If this file needs a frame, the code does not belong here."
+                        },
+                        {
+                            "group": ["am32-core/link", "am32-core/link/*"],
+                            "message": "issue #3 section 7.2: the client boundary may construct a transport and a session, but the link layer belongs in am32-core. If this file needs a timeout, the code does not belong here."
+                        }
+                    ]
+                }]
+            }
+        }
+    ]
 }

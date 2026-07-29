@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Gate for overhaul block 1a (issue #3): the removed features are actually gone.
+# Gate for overhaul blocks 1a and 5 (issue #3): the removed code is actually gone.
 #
 # Deliberately asserts on *specific symbols and paths*, not on substrings.
 # A grep for "direct|amj|bootloader" over the source tree matches 136 lines of
@@ -75,6 +75,36 @@ assert_symbol_absent bootloaders                        "MinIO/Redis mount + cat
 assert_symbol_absent bootloaderData                     "release sync"
 assert_symbol_absent bootloaderStream                   "release sync"
 assert_symbol_absent bootloader_data                    "downloads page accordion slot"
+
+echo
+# Block 5: the app's second protocol stack, and the dead code audit item I lists.
+#
+# Note for whoever edits the app after this: these are word-matched over
+# components, pages, server, src, stores, utils, layouts, composables, nuxt.d.ts,
+# app.vue and run.ts, *including comments*. Naming one of them in a comment fails
+# the gate, which is why the code points at this file instead of listing them.
+# The names are recorded in docs/plans/overhaul/notes/block-5.md.
+echo "Legacy protocol stack (block 5)"
+assert_path_absent   src/communication                  "the app's second protocol stack -- Am32Session replaces it"
+assert_symbol_absent CommandQueue                       "commands.queue.ts"
+assert_symbol_absent processMspResponse                 "commands.queue.ts store mirroring"
+assert_symbol_absent processFourWayResponse             "commands.queue.ts"
+assert_symbol_absent addCommandWithCallback             "commands.queue.ts"
+assert_symbol_absent sendWithPromise                    "the legacy exchange entry point"
+assert_symbol_absent sendWithCallback                   "FourWay's queue-driven path"
+assert_symbol_absent writeAddress                       "FourWay dead method"
+assert_symbol_absent verifyPages                        "FourWay dead method"
+assert_symbol_absent writeEEprom                        "FourWay dead method"
+assert_symbol_absent writeHex                           "audit C's timeout call site; session.flash replaces it"
+assert_symbol_absent commandCount                       "Msp dead counter"
+assert_dep_absent    queue                              "commands.queue.ts was its only consumer"
+
+echo
+echo "Dead store fields (block 5, audit item I)"
+assert_symbol_absent refreshReader                      "grabbed a second reader behind the transport's back"
+assert_symbol_absent deviceHandles                      "reader/writer/msp/fourWay handles, unused since block 2"
+assert_symbol_absent mspData                            "replaced by FcInfo from the session"
+assert_symbol_absent MspData                            "its type"
 
 echo
 if [ "$FAIL" -ne 0 ]; then

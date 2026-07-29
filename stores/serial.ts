@@ -4,13 +4,15 @@ import type { FcInfo } from 'am32-core/session';
 /**
  * Everything the UI needs to know about the serial link, and nothing more.
  *
- * Block 5 emptied this out. It used to hold a `deviceHandles` record with a
- * reader, a writer and two protocol-class instances, plus a `refreshReader()`
- * that grabbed a second reader behind the transport's back -- all of it audit
- * item **I**, all of it unused since block 2 moved stream ownership into
- * `am32-web`'s transport. `mspData` is gone the same way: `FcInfo` from the
- * session carries the variant, the API version, the motor count, the battery and
- * the quirks, and it is produced by the same code the CLI runs.
+ * Block 5 emptied this out. It used to hold a record of stream handles -- a
+ * reader, a writer and two protocol-class instances -- plus an action that
+ * grabbed a second reader behind the transport's back: all of it audit item
+ * **I**, all of it unused since block 2 moved stream ownership into `am32-web`'s
+ * transport. The MSP facts the FC reported went the same way, replaced by
+ * `FcInfo` from the session, which carries the variant, the API version, the
+ * motor count, the battery and the quirks and is produced by the same code the
+ * CLI runs. `scripts/assert-deleted.sh` names the removed symbols; this file
+ * deliberately does not, because that gate greps these directories for them.
  *
  * `hasConnection` and `isFourWay` are **mirrors of the session's state**, written
  * only by `useEscSession`'s event handler. Nothing else may set them: they used

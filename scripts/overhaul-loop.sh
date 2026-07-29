@@ -28,6 +28,8 @@
 #   OVERHAUL_DEADLINE_MIN=0         wall-clock budget, 0 = unlimited
 #   OVERHAUL_BLOCK_TIMEOUT=5400     per-block timeout in seconds (90 min)
 #   OVERHAUL_MAX_ATTEMPTS=3         attempts per block before giving up
+#   OVERHAUL_LIMIT_PAUSE_SEC=900    wait between usage-limit retries (no attempt cost)
+#   OVERHAUL_LIMIT_MAX_PAUSES=24    cap on those waits (24 x 15min = 6h)
 #   OVERHAUL_MODEL='opus[1m]'
 #   OVERHAUL_EFFORT=xhigh          # see the note in the preflight below
 
@@ -43,6 +45,10 @@ BRANCH="${OVERHAUL_BRANCH:-master}"
 DEADLINE_MIN="${OVERHAUL_DEADLINE_MIN:-0}"
 BLOCK_TIMEOUT="${OVERHAUL_BLOCK_TIMEOUT:-5400}"
 MAX_ATTEMPTS="${OVERHAUL_MAX_ATTEMPTS:-3}"
+# Usage-limit backoff. These pauses do not consume an attempt; the cap exists so
+# an exhausted weekly window cannot leave the loop spinning indefinitely.
+LIMIT_PAUSE_SEC="${OVERHAUL_LIMIT_PAUSE_SEC:-900}"
+LIMIT_MAX_PAUSES="${OVERHAUL_LIMIT_MAX_PAUSES:-24}"
 MODEL="${OVERHAUL_MODEL:-opus[1m]}"
 # xhigh, not max. Anthropic's own guidance is that xhigh is the best setting for
 # coding and agentic work, and that max shows diminishing returns and is prone to
@@ -215,6 +221,7 @@ while :; do
 
     attempt=1
     passed=0
+    pauses=0
     fail_log="$LOGDIR/block-$id-failure.log"
 
     while [ "$attempt" -le "$MAX_ATTEMPTS" ]; do
@@ -231,6 +238,33 @@ while :; do
             > "$log" 2>&1
         agent_exit=$?
         [ "$agent_exit" -eq 124 ] && warn "block timed out after ${BLOCK_TIMEOUT}s"
+
+        # A usage limit that stopped the agent before it did anything is not a
+        # failed attempt: there is nothing to roll back and nothing to learn from
+        # an immediate retry. Burning the attempt budget against it turns "wait
+        # for the window to roll" into "block is stuck" -- exactly what happened
+        # to block 3 on the first overnight run, three attempts in one second.
+        #
+        # The message alone is not sufficient evidence, though. Block 2 hit the
+        # same limit on its *final* message, after 42 minutes of real work that
+        # verified clean and landed correctly. So require both: the limit
+        # message, and a tree identical to where the agent started. If anything
+        # was committed or left uncommitted, the agent did work -- fall through
+        # and let verification judge it on its merits.
+        if grep -qiE "hit your (session|weekly|usage|Opus) limit|usage limit reached" "$log" 2>/dev/null \
+           && [ "$(git rev-parse HEAD)" = "$base" ] \
+           && [ -z "$(git status --porcelain)" ]; then
+            pauses=$((pauses + 1))
+            if [ "$pauses" -gt "$LIMIT_MAX_PAUSES" ]; then
+                warn "usage limit still in effect after $LIMIT_MAX_PAUSES pauses -- giving up"
+                warn "$(head -1 "$log")"
+                break
+            fi
+            warn "usage limit hit: $(head -1 "$log")"
+            warn "waiting ${LIMIT_PAUSE_SEC}s (pause $pauses/$LIMIT_MAX_PAUSES); attempt $attempt not consumed"
+            sleep "$LIMIT_PAUSE_SEC"
+            continue
+        fi
 
         # Sweep up anything the agent left uncommitted, so verification runs
         # against the real tree rather than a half-committed one.

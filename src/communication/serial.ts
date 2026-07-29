@@ -1,5 +1,14 @@
 import type { WebSerial } from 'webserial-wrapper';
-import { SerialTransport, inferPacketProbe, type SerialPacketProbe } from '@am32/serial-msp';
+import { isCompleteFourWayFrame } from 'am32-core/framing/fourway';
+import { isCompleteMspFrame, isMspRequest } from 'am32-core/framing/msp';
+import { SerialTransport, type SerialPacketProbe } from '~/src/communication/serial-transport';
+
+/**
+ * Pick the completeness probe from the request we are about to send: MSP
+ * headers are unmistakable, and everything else on this link is 4-way.
+ */
+const inferPacketProbe = (request: Uint8Array): SerialPacketProbe =>
+    (isMspRequest(request) ? isCompleteMspFrame : isCompleteFourWayFrame);
 
 /**
  * Default exchange timeout for MSP and other short USB serial commands.
@@ -36,9 +45,7 @@ class Serial {
         this.serial = serial;
         this.port = port;
         this.transport = new SerialTransport({
-            log,
             logError,
-            logWarning,
             serial,
             port,
             getStream: () => useSerialStore().deviceHandles.stream,

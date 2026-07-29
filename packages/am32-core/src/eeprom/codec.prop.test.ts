@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import fc from 'fast-check';
+import type { EepromLayoutField } from './layout';
 import { EEPROM_SIZE, EepromLayout } from './layout';
 import { decodeSettings, encodeSettings, patchSettings } from './codec';
 
@@ -53,7 +54,7 @@ describe('eeprom codec round-trip', () => {
     });
 
     it('writing one single-byte field changes exactly one byte', () => {
-        const singleByteFields = Object.entries(EepromLayout)
+        const singleByteFields = Object.entries(EepromLayout as EepromLayoutField)
             .filter(([, f]) => f.size === 1 && f.minEepromVersion === undefined);
 
         fc.assert(
@@ -142,7 +143,7 @@ describe('audit A: the CAN block survives a save', () => {
 
 describe('version-gated fields', () => {
     it('carries fields excluded at revision 2 through untouched', () => {
-        const original = image((i) => i);
+        const original = image(i => i);
         const settings = decodeSettings(original, 2);
 
         // 0x05..0x0C are minEepromVersion 3, so they must not decode at all...
@@ -198,7 +199,7 @@ describe('codec contracts', () => {
     });
 
     it('round-trips the startup melody as a plain array', () => {
-        const base = image((i) => i);
+        const base = image(i => i);
         const settings = decodeSettings(base, 3);
         expect(Array.isArray(settings.STARTUP_MELODY)).toBe(true);
         expect((settings.STARTUP_MELODY as number[]).length).toBe(128);

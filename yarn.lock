@@ -12,15 +12,6 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@am32/serial-msp@npm:^0.1.0":
-  version: 0.1.0
-  resolution: "@am32/serial-msp@npm:0.1.0"
-  dependencies:
-    webserial-wrapper: "npm:^1.0.4"
-  checksum: 10c0/1856a946cf9c968c3b4a62c9d4eb2e562ff8e6758d146a687287ebef9548deeb86c6d171f1d4c89700077664deb7752c4a77a2c5672cbf2cfee83a54521f4339
-  languageName: node
-  linkType: hard
-
 "@animxyz/core@npm:^0.6.6":
   version: 0.6.6
   resolution: "@animxyz/core@npm:0.6.6"
@@ -6259,7 +6250,6 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "ark32-configurator@workspace:."
   dependencies:
-    "@am32/serial-msp": "npm:^0.1.0"
     "@animxyz/core": "npm:^0.6.6"
     "@animxyz/vue3": "npm:^0.6.7"
     "@egoist/tailwindcss-icons": "npm:^1.9.2"
@@ -6309,6 +6299,7 @@ __metadata:
     vue-matomo: "npm:^4.2.0"
     vue-router: "npm:^4.2.5"
     vue-tsc: "npm:^2.2.8"
+    webserial-wrapper: "npm:^1.0.4"
   languageName: unknown
   linkType: soft
 

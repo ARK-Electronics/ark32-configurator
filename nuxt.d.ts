@@ -16,29 +16,8 @@ interface MspData {
     motorCount: number
 }
 
-interface FourWayResponse {
-    command: number;
-    address: number;
-    ack: number;
-    checksum: number;
-    params: Uint8Array;
-}
-
 type SettingsType = 'select' | 'bool' | 'string' | 'number' | 'rtttl';
 type SettingsSelectOptionsType = { label: string, value: number };
-
-interface HexData {
-    address: number,
-    bytes: number,
-    data: number[]
-}
-
-interface Hex {
-    data: HexData[],
-    endOfFile: boolean,
-    bytes: number,
-    startLinearAddress: number
-}
 
 interface BlobFolderFile {
     name: string;

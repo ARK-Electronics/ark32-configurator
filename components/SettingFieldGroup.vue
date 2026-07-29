@@ -28,7 +28,7 @@
 </template>
 <script setup lang="ts">
 import { coerce, compare } from 'semver';
-import type { EepromLayoutKeys } from '~/src/eeprom';
+import type { EepromLayoutKeys } from 'am32-core/eeprom/layout';
 
 const escStore = useEscStore();
 

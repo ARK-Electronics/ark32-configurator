@@ -1,51 +1,37 @@
-import Flash from '../flash';
-import Mcu, { type McuInfo } from '../mcu';
+import { EEPROM_SIZE } from 'am32-core/eeprom/layout';
+import { decodeSettings, encodeSettings } from 'am32-core/eeprom/codec';
+import {
+    FOUR_WAY_ACK,
+    FOUR_WAY_COMMANDS,
+    encodeFourWayRequest,
+    isCompleteFourWayFrame,
+    parseFourWayResponse,
+    type FourWayResponse
+} from 'am32-core/framing/fourway';
+import { fillImage, parseHex } from 'am32-core/hex';
+import Mcu, { createMcuInfo, type McuInfo } from 'am32-core/mcu';
 import CommandQueue from '~/src/communication/commands.queue';
 import Serial from '~/src/communication/serial';
 
+// Re-exported so the app keeps importing 4-way symbols from its own facade
+// rather than reaching into am32-core/framing directly -- block 5 adds the
+// no-restricted-imports rule that makes this mandatory for components.
+export { FOUR_WAY_ACK, FOUR_WAY_COMMANDS };
+export type { FourWayResponse };
+
 /**
- * Soft-serial (ESC line) is 19200 8N1. A 184-byte EEPROM settings read alone is
- * ~97ms on the wire, and the FC budgets ~187ms for the soft-serial RX. End-to-
+ * Soft-serial (ESC line) is 19200 8N1. A 192-byte EEPROM settings read alone is
+ * ~100ms on the wire, and the FC budgets ~187ms for the soft-serial RX. End-to-
  * end USB 4-way exchanges therefore need a generous host timeout or the last
  * ESCs in an enumerate loop fail with short reads / checksum errors.
+ *
+ * Block 2 replaces these literals with the core's TimeoutPolicy.
  */
 export const FOUR_WAY_DEFAULT_TIMEOUT_MS = 1000;
 export const FOUR_WAY_READ_TIMEOUT_MS = 1500;
 export const FOUR_WAY_RETRY_DELAY_MS = 300;
 export const FOUR_WAY_DEFAULT_RETRIES = 10;
 export const FOUR_WAY_INIT_RETRIES = 10;
-
-export enum FOUR_WAY_COMMANDS {
-    cmd_InterfaceTestAlive = 0x30,
-    cmd_ProtocolGetVersion = 0x31,
-    cmd_InterfaceGetName = 0x32,
-    cmd_InterfaceGetVersion = 0x33,
-    cmd_InterfaceExit = 0x34,
-    cmd_DeviceReset = 0x35,
-    cmd_DeviceInitFlash = 0x37,
-    cmd_DeviceEraseAll = 0x38,
-    cmd_DevicePageErase = 0x39,
-    cmd_DeviceRead = 0x3A,
-    cmd_DeviceWrite = 0x3B,
-    cmd_DeviceC2CK_LOW = 0x3C,
-    cmd_DeviceReadEEprom = 0x3D,
-    cmd_DeviceWriteEEprom = 0x3E,
-    cmd_InterfaceSetMode = 0x3F,
-  };
-
-export enum FOUR_WAY_ACK {
-    ACK_OK = 0x00,
-    ACK_I_UNKNOWN_ERROR = 0x01,
-    ACK_I_INVALID_CMD = 0x02,
-    ACK_I_INVALID_CRC = 0x03,
-    ACK_I_VERIFY_ERROR = 0x04,
-    ACK_D_INVALID_COMMAND = 0x05,
-    ACK_D_COMMAND_FAILED = 0x06,
-    ACK_D_UNKNOWN_ERROR = 0x07,
-    ACK_I_INVALID_CHANNEL = 0x08,
-    ACK_I_INVALID_PARAM = 0x09,
-    ACK_D_GENERAL_ERROR = 0x0F,
-  };
 
 export class FourWay {
     static instance: FourWay;
@@ -74,50 +60,12 @@ export class FourWay {
     }
 
     makePackage (cmd: FOUR_WAY_COMMANDS, params: number[], address: number) {
-        if (params.length === 0) {
-            params.push(0);
-        } else if (params.length > 256) {
-            this.logError('Too many parameters ' + params.length);
-            return;
+        try {
+            return encodeFourWayRequest(cmd, params, address).buffer as ArrayBuffer;
+        } catch (e: any) {
+            this.logError(e.message);
+            return undefined;
         }
-
-        const bufferOut = new ArrayBuffer(7 + params.length);
-        const bufferView = new Uint8Array(bufferOut);
-
-        bufferView[0] = 0x2F;
-        bufferView[1] = cmd;
-        bufferView[2] = (address >> 8) & 0xFF;
-        bufferView[3] = address & 0xFF;
-        bufferView[4] = params.length === 256 ? 0 : params.length;
-
-        // Copy params
-        const outParams = bufferView.subarray(5);
-        for (let i = 0; i < params.length; i += 1) {
-            outParams[i] = params[i];
-        }
-
-        // Calculate checksum
-        const msgWithoutChecksum = bufferView.subarray(0, -2);
-        const checksum = msgWithoutChecksum.reduce(this.crc16XmodemUpdate, 0);
-
-        bufferView[5 + params.length] = (checksum >> 8) & 0xFF;
-        bufferView[6 + params.length] = checksum & 0xFF;
-
-        return bufferOut;
-    }
-
-    crc16XmodemUpdate (crc: number, byte: number) {
-        const poly = 0x1021;
-        crc ^= byte << 8;
-        for (let i = 0; i < 8; i += 1) {
-            if (crc & 0x8000) {
-                crc = (crc << 1) ^ poly;
-            } else {
-                crc <<= 1;
-            }
-        }
-
-        return crc & 0xFFFF;
     }
 
     initFlash (target: number, retries = FOUR_WAY_INIT_RETRIES) {
@@ -152,7 +100,7 @@ export class FourWay {
 
         this.log(`Reading ESC #${target + 1} (init retries=${initRetries})`);
         const flash = await this.initFlash(target, initRetries);
-        const info = Flash.getInfo(flash!);
+        const info = createMcuInfo(flash!.params);
         const mcu = new Mcu(info.meta.signature);
         mcu.setInfo(info);
 
@@ -172,10 +120,10 @@ export class FourWay {
                 mcu.getInfo().bootloader.valid = false;
             }
 
-            mcu.getInfo().layoutSize = Mcu!.LAYOUT_SIZE;
-
-            const settingsArray = (await this.readAddress(eepromOffset, mcu.getInfo().layoutSize))!.params;
-            mcu.getInfo().settings = bufferToSettings(settingsArray, info.settings.LAYOUT_REVISION as number);
+            // EEPROM_SIZE is 192: the whole EEprom_t, not the 184 bytes the old
+            // Mcu.LAYOUT_SIZE read, which stopped inside the CAN block.
+            const settingsArray = (await this.readAddress(eepromOffset, EEPROM_SIZE))!.params;
+            mcu.getInfo().settings = decodeSettings(settingsArray, settingsArray[1]);
             mcu.getInfo().settingsBuffer = settingsArray;
 
             const [valid, pin] = Mcu.parseBootLoaderPin(mcu.getInfo().bootloader.input);
@@ -184,12 +132,12 @@ export class FourWay {
             } else {
                 mcu.getInfo().bootloader.valid = true;
                 mcu.getInfo().bootloader.pin = pin;
-                mcu.getInfo().bootloader.version = info.settings.BOOT_LOADER_REVISION as number ?? 0;
+                mcu.getInfo().bootloader.version = mcu.getInfo().settings.BOOT_LOADER_REVISION as number ?? 0;
             }
 
             if (mcu.getInfo().bootloader.version === 0xFF) {
                 logStore.logWarning('Bootloader version unset, setting to 1');
-                info.settings.BOOT_LOADER_REVISION = 1;
+                mcu.getInfo().settings.BOOT_LOADER_REVISION = 1;
                 await this.writeSettings(target, mcu.getInfo());
                 mcu.getInfo().bootloader.version = 1;
             }
@@ -237,7 +185,7 @@ export class FourWay {
         }
 
         try {
-            return await Serial.write(message, timeout);
+            return await Serial.write(message, timeout, isCompleteFourWayFrame);
         } catch (e: any) {
             this.logError(`4-way command failed: ${e.message}`);
             return null;
@@ -297,50 +245,18 @@ export class FourWay {
     }
 
     parseMessage (buffer: ArrayBufferLike) {
-        const fourWayIf = 0x2E;
-
-        const view = new Uint8Array(buffer);
-        if (view[0] !== fourWayIf) {
-            const error = `invalid message start: ${view[0]}`;
-            throw new Error(error);
+        try {
+            const message = parseFourWayResponse(new Uint8Array(buffer));
+            return {
+                commandName: message.command,
+                data: message
+            };
+        } catch (e: any) {
+            if (e.reason === 'checksum') {
+                this.logError(e.message);
+            }
+            throw e;
         }
-
-        if (view.length < 9) {
-            throw new Error('NotEnoughDataError');
-        }
-
-        let paramCount = view[4];
-        if (paramCount === 0) {
-            paramCount = 256;
-        }
-
-        if (view.length < 8 + paramCount) {
-            throw new Error('NotEnoughDataError');
-        }
-
-        const message: FourWayResponse = {
-            command: view[1],
-            address: (view[2] << 8) | view[3],
-            ack: view[5 + paramCount],
-            checksum: (view[6 + paramCount] << 8) | view[7 + paramCount],
-            params: view.slice(5, 5 + paramCount)
-        };
-
-        const msgWithoutChecksum = view.subarray(0, 6 + paramCount);
-        const checksum = msgWithoutChecksum.reduce(this.crc16XmodemUpdate, 0);
-
-        if (checksum !== message.checksum) {
-            // this.increasePacketErrors(1);
-
-            const error = `checksum mismatch, received: ${message.checksum}, calculated: ${checksum}`;
-            this.logError(error);
-            throw new Error(error);
-        }
-
-        return {
-            commandName: message.command,
-            data: message
-        };
     }
 
     writeAddress (address: number, data: Uint8Array) {
@@ -400,21 +316,25 @@ export class FourWay {
         const flash = await this.sendWithPromise(FOUR_WAY_COMMANDS.cmd_DeviceInitFlash, [target]);
 
         if (flash) {
-            const newSettingsArray = objectToSettingsArray(esc.settings, esc.settings.LAYOUT_REVISION as number);
-            if (newSettingsArray.length !== esc.settingsBuffer.length) {
-                throw new Error('settings length mismatch');
-            }
+            // Byte-preserving: start from what the ESC handed us and overwrite
+            // only the fields the layout names, so reserved bytes 13-16, the CAN
+            // block at 176-183 and can.reserved at 184-191 survive. Audit item A.
+            const newSettingsArray = encodeSettings(
+                esc.settingsBuffer,
+                esc.settings,
+                esc.settings.LAYOUT_REVISION as number
+            );
 
             if (compare(newSettingsArray, esc.settingsBuffer)) {
                 this.logWarning('No changed settings found for ESC #' + (target + 1));
             } else {
-                const info = Flash.getInfo(flash!);
+                const info = createMcuInfo(flash!.params);
                 const mcu = new Mcu(info.meta.signature);
 
                 let readbackSettings = null;
 
                 await this.write(mcu.getEepromOffset(), newSettingsArray);
-                readbackSettings = (await this.readAddress(mcu.getEepromOffset(), Mcu.LAYOUT_SIZE));
+                readbackSettings = (await this.readAddress(mcu.getEepromOffset(), EEPROM_SIZE));
 
                 if (readbackSettings) {
                     /*
@@ -435,13 +355,13 @@ export class FourWay {
 
     async writeHex (target: number, hex: string, timeout: number) { // }, force: boolean, migrate: boolean) {
         const escStore = useEscStore();
-        const parsed = Flash.parseHex(hex);
+        const parsed = parseHex(hex);
         if (parsed) {
             const initFlash = await this.initFlash(target, 3);
-            const info = Flash.getInfo(initFlash!);
+            const info = createMcuInfo(initFlash!.params);
             const mcu = new Mcu(info.meta.signature);
             const endAddress = parsed.data[parsed.data.length - 1].address + parsed.data[parsed.data.length - 1].bytes;
-            const flash = Flash.fillImage(parsed, endAddress - mcu.getFlashOffset(), mcu.getFlashOffset());
+            const flash = fillImage(parsed, endAddress - mcu.getFlashOffset(), mcu.getFlashOffset());
             if (flash) {
                 const eepromOffset = mcu.getEepromOffset();
                 const pageSize = mcu.getPageSize();
@@ -451,7 +371,7 @@ export class FourWay {
                 escStore.bytesWritten = 0;
                 escStore.step = 'Writing';
 
-                const message = await this.readAddress(mcu.getEepromOffset(), Mcu.LAYOUT_SIZE);
+                const message = await this.readAddress(mcu.getEepromOffset(), EEPROM_SIZE);
                 if (message) {
                     const originalSettings = message.params;
 

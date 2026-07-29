@@ -35,7 +35,7 @@
         {
             "id": "1b",
             "title": "Protocol core extraction",
-            "status": "todo",
+            "status": "in-progress",
             "dependsOn": [
                 "1a"
             ],

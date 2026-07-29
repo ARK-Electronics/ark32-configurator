@@ -1,4 +1,4 @@
-import type { EscData } from '~/src/mcu';
+import type { EscData } from 'am32-core/mcu';
 
 export const useEscStore = defineStore('esc', () => {
     const count = ref(0);

@@ -3,6 +3,7 @@ import { useEscStore } from './../../stores/esc';
 import { useLogStore } from './../../stores/log';
 import { MSP_COMMANDS } from './msp';
 import { FOUR_WAY_COMMANDS } from './four_way';
+import { type FourWayResponse } from 'am32-core/framing/fourway';
 
 export interface QueueCommand {
     commandName: MSP_COMMANDS | FOUR_WAY_COMMANDS,

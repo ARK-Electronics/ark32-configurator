@@ -1,6 +1,6 @@
 # Block 1b — Protocol core extraction
 
-Landed on `master` as five commits on top of `1b31d9c`:
+Landed on `master` on top of `1b31d9c`:
 
 | Commit | What |
 |---|---|
@@ -8,18 +8,20 @@ Landed on `master` as five commits on top of `1b31d9c`:
 | `f57c29b` | `refactor(app): move protocol code into am32-core and drop @am32/serial-msp` |
 | `dd62059` | `style(core): use named exports and named fast-check imports` |
 | `41ee527` | `fix(esc): read the layout revision from the ESC's own eeprom byte` |
+| `4622003` | `fix(core): drop unparseable RX bytes instead of buffering them forever` |
 | (this file) | the handoff note |
 
 ## Verification
 
 ```
-yarn verify                                → exit 0  (lint 0 errors / 23 warnings, typecheck:core + typecheck:app clean, 91 tests in 5 files)
+yarn verify                                → exit 0  (lint 0 errors / 23 warnings, typecheck:core + typecheck:app clean, 93 tests in 5 files)
 bash scripts/assert-deleted.sh             → exit 0  (13 assertions, all clear)
 yarn build                                 → exit 0  (see the block-1a warning about this)
+./run.sh --no-browser                      → dev server up, GET /configurator 200, vue-tsc 0 errors
 done-when (the four tests from STATUS.json) → exit 0
 ```
 
-Test counts by file: `eeprom/codec.prop.test.ts` 19, `framing/msp.test.ts` 34,
+Test counts by file: `eeprom/codec.prop.test.ts` 19, `framing/msp.test.ts` 36,
 `framing/fourway.test.ts` 28, `hex.test.ts` 7, `index.test.ts` 3.
 
 **Lint dropped 27 → 23 warnings, still 0 errors.** Note for whoever keeps the
@@ -54,6 +56,15 @@ The legacy transcription was then reverted; it is not in the tree.
 For MSP the four audit-D cases live in the `audit D: what the old parser got
 wrong` describe block, each annotated with what the old parser did with that
 exact byte sequence.
+
+**4-way framing had to stay bit-identical, and I checked that separately.** I
+transcribed the old `makePackage` / `parseMessage` / `crc16XmodemUpdate` from
+`1b31d9c` into a throwaway test and compared them against the core over 2000
+random requests (random command, address, and 1-256 random params) and 2000
+random responses: byte-identical encodes and field-identical parses, including
+the 256-params-as-0 case. That test is **not** in the tree -- it asserts against
+code this block deleted, so it would rot immediately. If you need to redo it
+after moving this code, it is twenty lines and worth the twenty lines.
 
 ## What I built
 

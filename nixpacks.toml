@@ -1,5 +1,24 @@
-# Prisma 7 requires Node 20.19+, 22.12+, or 24+.
-# Nixpacks only pins major versions from nixpkgs; nodejs_20 is too old,
-# so use Node 22 for a supported runtime.
+# Sevalla / Nixpacks production config for Nuxt 3 + Prisma 7
+# Prisma 7 needs Node 20.19+ / 22.12+ / 24+; Nixpacks nodejs_20 is too old.
+
 [variables]
 NIXPACKS_NODE_VERSION = "22"
+HOST = "0.0.0.0"
+NITRO_HOST = "0.0.0.0"
+CI = "true"
+YARN_ENABLE_INLINE_BUILDS = "true"
+
+[phases.install]
+# Avoid yarn --check-cache (flaky on remote builders). Corepack provides Yarn 4.
+cmds = [
+  "npm install -g corepack@0.24.1",
+  "corepack enable",
+  "yarn install --immutable"
+]
+
+[phases.build]
+# Placeholder URL is only for prisma generate (see prisma.config.ts); not used at runtime.
+cmds = ["DATABASE_URL=\"${DATABASE_URL:-mysql://build:build@127.0.0.1:3306/build}\" yarn run build"]
+
+[start]
+cmd = "node .output/server/index.mjs"

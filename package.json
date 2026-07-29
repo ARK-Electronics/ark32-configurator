@@ -6,9 +6,9 @@
     "node": ">=20.19.0"
   },
   "scripts": {
-    "build": "prisma generate && nuxt build",
-    "dev": "prisma generate && nuxt dev",
-    "generate": "prisma generate && nuxt generate",
+    "build": "nuxt prepare && prisma generate && nuxt build",
+    "dev": "nuxt prepare && prisma generate && nuxt dev",
+    "generate": "nuxt prepare && prisma generate && nuxt generate",
     "prepare": "nuxt prepare",
     "preview": "nuxt preview",
     "start": "node .output/server/index.mjs",

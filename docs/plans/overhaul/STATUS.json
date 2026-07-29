@@ -59,7 +59,7 @@
         {
             "id": "3",
             "title": "Simulated FC and ESCs",
-            "status": "todo",
+            "status": "stuck",
             "dependsOn": [
                 "2"
             ],

@@ -6,6 +6,7 @@
     "description": "Transport-agnostic AM32/MSP/4-way protocol core. No DOM, no Node, no Vue.",
     "exports": {
         ".": "./src/index.ts",
+        "./link": "./src/link/index.ts",
         "./*": "./src/*.ts"
     },
     "scripts": {

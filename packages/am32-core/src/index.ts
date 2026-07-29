@@ -1,9 +1,9 @@
 /**
  * am32-core — the transport-agnostic protocol core.
  *
- * Block 1b filled in the framing, eeprom, mcu and hex layers. Block 2 adds the
- * link layer and Clock, block 4 adds Am32Session.
- * See docs/plans/overhaul/STATUS.json and issue #3.
+ * Block 1b filled in the framing, eeprom, mcu and hex layers. Block 2 added the
+ * transport interface, the injectable clock and the link layer; block 4 adds
+ * Am32Session. See docs/plans/overhaul/STATUS.json and issue #3.
  *
  * Everything here is importable both as a whole (`am32-core`) and by module
  * (`am32-core/framing/msp`). Vue components must use the session layer only --
@@ -70,19 +70,29 @@ export type { EscData, McuInfo, McuVariant } from './mcu';
 export { fillImage, parseHex } from './hex';
 export type { Hex, HexData } from './hex';
 
-/**
- * The one extension point of the whole stack.
- *
- * Transports move bytes and nothing else: no framing, no timeouts, no retries,
- * no drain. Everything that could differ between the browser, Node, the
- * simulator and (later) Tauri is therefore forced up into the link layer, which
- * is what makes the UI and CLI paths identical by construction rather than by
- * discipline.
- */
-export interface Transport {
-    open(opts: { baudRate: number }): Promise<void>
-    close(): Promise<void>
-    write(data: Uint8Array): Promise<void>
-    onData(cb: (chunk: Uint8Array) => void): () => void
-    readonly isOpen: boolean
-}
+export type { Transport } from './transport';
+
+export { VirtualClock, createSystemClock } from './clock';
+export type { Clock, ClockTimer, TimerHost } from './clock';
+
+export { Link, LinkError } from './link/link';
+export type {
+    LinkErrorReason,
+    LinkOptions,
+    LinkProbe,
+    LinkRequestOptions,
+    LinkStats,
+    LinkValidator
+} from './link/link';
+
+export {
+    DEFAULT_TIMEOUT_POLICY,
+    HOST_LINK_BAUD,
+    HOST_MARGIN_MS,
+    MSP_PASSTHROUGH_MS,
+    SOFT_SERIAL_BAUD,
+    TIMEOUT_FLOORS,
+    TimeoutPolicy,
+    wireMs
+} from './link/timeout-policy';
+export type { FcVariant, TimeoutPolicyOptions } from './link/timeout-policy';

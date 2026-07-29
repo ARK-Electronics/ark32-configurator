@@ -345,6 +345,42 @@ describe('Am32Session.flash', () => {
         await drive(h.clock, h.session.flash(1, firmwareHex({ name: 'ARK_OTHER_F051' })));
     });
 
+    it('never addresses the EEPROM page, even when the hex reaches past it', async () => {
+        // The app streamed pages 0x04..0x40 -- the end of *flash* -- bounded only
+        // by the image length, so a hex with records above the application region
+        // took the settings page with it. The application genuinely ends where the
+        // EEPROM page begins (AM32 `STM32F051K6TX_FLASH.ld:43-46`), so that is the
+        // ceiling.
+        const mcu = new Mcu(0x1F06);
+        const eeprom = mcu.getEepromOffset();
+        const h = await inPassthrough();
+        const esc = firstEsc(h);
+
+        const addresses: number[] = [];
+        const realSetAddress = esc.setAddress.bind(esc);
+        (esc as unknown as { setAddress: (a: number) => unknown }).setAddress = (address: number) => {
+            addresses.push(address);
+            return realSetAddress(address);
+        };
+
+        const hex = intelHex([
+            { address: FLASH_OFFSET + mcu.getFirmwareStart(), data: Array.from({ length: 256 }, () => 0x5A) },
+            { address: FLASH_OFFSET + eeprom - 32, data: nameBlock('ARK_4IN1_F051') },
+            // Records inside the settings page and beyond it. A real AM32 build
+            // does not produce these; a hand-built or mis-linked one can.
+            { address: FLASH_OFFSET + eeprom, data: Array.from({ length: 512 }, () => 0xA5) }
+        ]);
+
+        await drive(h.clock, h.session.flash(0, hex));
+
+        // The two settings writes are *at* the EEPROM base; nothing goes above it.
+        expect(addresses.filter(address => address > eeprom)).toEqual([]);
+        expect(addresses.filter(address => address === eeprom).length).toBeGreaterThanOrEqual(2);
+        expect(Array.from(esc.canBlock)).toEqual([32, 1, 1, 10, 1, 200, 0, 1]);
+        // Nothing from the stray records reached flash.
+        expect(Array.from(esc.peek(eeprom + EEPROM_SIZE, 16)).every(b => b === 0xFF)).toBe(true);
+    });
+
     it('rejects a file that is not Intel HEX at all', async () => {
         const h = await inPassthrough();
 

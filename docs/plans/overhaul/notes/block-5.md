@@ -14,7 +14,7 @@ Landed on `master` on top of `e217035`:
 | `bf42d2f` | `refactor(store): drop the write-only settingsDirty flag (audit item I)` |
 | `1177d96` | `fix(app): serialise UI operations and stop apply-config cloning CAN identity` — the diff review's three findings |
 | `1677dde` | `docs(core): correct three firmware claims in the write and flash comments` |
-| (this file) | the handoff note |
+| `79c0875`, this file | the handoff note |
 
 ## Verification
 
@@ -304,6 +304,7 @@ fix to `git checkout --`.
 | `writeSettings` reports the pre-write image as what it wrote | 1 failed |
 | a component imports `am32-core/link`, `am32-core/framing/msp`, the barrel and `am32-web` | 4 lint errors |
 | a component imports `am32-core/session` (must stay legal) | 0 lint errors |
+| a composable imports the `am32-core` barrel and `am32-sim` (after closing the override hole) | 2 lint errors |
 | `src/communication/msp.ts` comes back | gate exits 1, naming 3 assertions |
 | the `queue` dependency comes back | gate exits 1 |
 | a `deviceHandles` field comes back in the store | gate exits 1 |

@@ -7,11 +7,12 @@ export default defineNuxtConfig({
     // debug. `transpile` is what makes Vite compile it instead of treating a
     // workspace symlink as a prebuilt dependency.
     alias: {
-        'am32-core': fileURLToPath(new URL('./packages/am32-core/src', import.meta.url))
+        'am32-core': fileURLToPath(new URL('./packages/am32-core/src', import.meta.url)),
+        'am32-web': fileURLToPath(new URL('./packages/am32-web/src', import.meta.url))
     },
 
     build: {
-        transpile: ['am32-core']
+        transpile: ['am32-core', 'am32-web']
     },
 
     devtools: {

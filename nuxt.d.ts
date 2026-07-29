@@ -6,21 +6,11 @@
 
 type LogMessageType = undefined | null | 'warning' | 'error'
 type LogMessage = [Date, string, LogMessageType]
-type LogFn = (s: string) => void;
-type PromiseFn<T = any> = (a: T | PromiseLike<T> | unknown | PromiseLike<any>) => any
-interface MspData {
-    type: 'bf' | 'qs' | 'kiss' | 'inav' | 'ardu' | 'fettec' | 'emuf' | null,
-    protocol_version: number
-    api_version: string,
-    batteryData: {
-        cellCount: number,
-        capacity: number,
-        voltage: number,
-        drawn: number,
-        amps: number
-    } | null,
-    motorCount: number
-}
+
+// `MspData`, `LogFn` and `PromiseFn` lived here for the app's own protocol
+// classes. Block 5 deleted those: what the FC reported is `FcInfo` from
+// `am32-core/session` now, produced by the same code the CLI runs, and the
+// callback types belonged to the command queue (audit item I).
 
 type SettingsType = 'select' | 'bool' | 'string' | 'number' | 'rtttl';
 type SettingsSelectOptionsType = { label: string, value: number };

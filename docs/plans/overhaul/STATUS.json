@@ -84,7 +84,7 @@
         {
             "id": "5",
             "title": "UI as a thin client",
-            "status": "todo",
+            "status": "in-progress",
             "dependsOn": [
                 "4"
             ],

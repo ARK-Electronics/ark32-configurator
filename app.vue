@@ -10,8 +10,6 @@
   </div>
 </template>
 <script setup>
-import { FourWay } from './src/communication/four_way';
-import { Msp } from './src/communication/msp';
 const { $pwa } = useNuxtApp();
 
 const toast = useToast();
@@ -41,12 +39,14 @@ onMounted(() => {
 });
 
 const serialStore = useSerialStore();
-const { log, logWarning, logError } = useLogStore();
+const { log, logError } = useLogStore();
 
+// Nothing to initialise any more: the protocol stack is created per connection by
+// `useEscSession`, which owns one `Am32Session` and the transport under it. The
+// two singletons that used to be primed here were the app's second protocol
+// implementation, deleted in block 5 of issue #3.
 if (import.meta.client && typeof navigator !== 'undefined' && 'serial' in navigator) {
     serialStore.hasSerial = true;
-    Msp.init(log, logWarning, logError);
-    FourWay.init(log, logWarning, logError);
 
     log('initializing...');
 } else if (import.meta.client) {

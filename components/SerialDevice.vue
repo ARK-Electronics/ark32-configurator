@@ -25,10 +25,10 @@
         <div class="flex gap-2 items-center">
           <UIcon name="i-fluent-serial-port-16-filled" dynamic :class="[serialStore.hasConnection ? 'text-green-500' : 'text-red-500']" />
         </div>
-        <div v-if="serialStore.hasConnection && serialStore.mspData.motorCount > 0" class="w-full flex justify-between gap-4">
+        <div v-if="serialStore.hasConnection && escChipCount > 0" class="w-full flex justify-between gap-4">
           <div class="flex gap-2">
             <UChip
-              v-for="n of serialStore.mspData.motorCount"
+              v-for="n of escChipCount"
               :key="n"
               :text="n"
               size="2xl"
@@ -62,17 +62,6 @@
             </UButton>
           </div>
         </div>
-      </div>
-      <div v-if="false && serialStore.hasConnection && serialStore.mspData.type" class="flex gap-1">
-        <UKbd>
-          {{ serialStore.mspData.type }}
-        </UKbd>
-        <UKbd>
-          Api: {{ serialStore.mspData.api_version }}
-        </UKbd>
-        <UKbd v-if="serialStore.isFourWay">
-          4way
-        </UKbd>
       </div>
       <div v-if="serialStore.hasConnection && escStore.count > 0" class="flex gap-4 w-full">
         <div class="w-full flex flex-col space-y-2">
@@ -365,21 +354,25 @@
 </template>
 
 <script setup lang="ts">
-
-import commandsQueue from '~/src/communication/commands.queue';
-import { FOUR_WAY_COMMANDS, FourWay } from '~/src/communication/four_way';
-import { MSP_COMMANDS, Msp } from '~/src/communication/msp';
-import Serial from '~/src/communication/serial';
 import db from '~/src/db';
-import { decodeSettings } from 'am32-core/eeprom/codec';
-import { parseHex } from 'am32-core/hex';
-import { Mcu, type EscData } from 'am32-core/mcu';
+import type { EscSettings } from 'am32-core/eeprom/layout';
 
+/**
+ * UI and store mirroring only.
+ *
+ * Everything this component used to do on the wire -- MSP framing, the 4-way
+ * retry loop, the 4.5 s ArduPilot wait, the enumerate loop, the flash page walk --
+ * now lives in `Am32Session` and is reached through `useEscSession`. That is
+ * block 5 of issue #3: the app becomes a thin client so the `ark32` CLI can drive
+ * the same code. If you find yourself needing a protocol constant or a
+ * millisecond number in this file, it belongs in `packages/am32-core`.
+ */
 const toast = useToast();
 const serialStore = useSerialStore();
 const escStore = useEscStore();
-const { escData } = storeToRefs(escStore);
-const { log, logWarning, logError } = useLogStore();
+const { logError } = useLogStore();
+const escSession = useEscSession();
+
 const usbFCVendorIds = [0x0483, 0x2E3C, 0x2E8A, 0x1209, 0x26AC, 0x27AC, 0x2DAE, 0x3162, 0x35A7];
 const flashModalOpen = ref(false);
 const applyDefaultConfigModalOpen = ref(false);
@@ -397,6 +390,21 @@ const savingOrApplyingSelectedEscs = ref<number[]>([]);
 const isFlashingActive = computed(() => escStore.activeTarget > -1);
 
 const progressIsIntermediate = computed(() => !['Writing', 'Verifying'].includes(escStore.step));
+
+/**
+ * How many ESC chips to show.
+ *
+ * `motorCount` is `MSP_MOTOR_CONFIG` byte 6; `expectedCount` is the
+ * `MSP_SET_PASSTHROUGH` reply, i.e. how many channels the FC will actually let us
+ * address. They are different numbers and on Betaflight they can disagree, so the
+ * row is sized by whichever is largest rather than by the one that happens to be
+ * populated.
+ */
+const escChipCount = computed(() => Math.max(
+    serialStore.motorCount,
+    escStore.expectedCount,
+    escStore.escData.length
+));
 
 const { data, status } = useAsyncData('get-releases', () => useFetch(`/api/files?filter=releases${includePrerelease.value ? '&prereleases' : ''}`), {
     watch: [includePrerelease]
@@ -447,7 +455,6 @@ watchEffect(() => {
     if (assets.value && escStore.escData.length > 0) {
         const tag = selectedRelease.value;
         const cleanTag = tag.substring(1).replace(/-rc[1-9]*[0-9]*/gi, '');
-        console.log(`AM32_${escStore.firstValidEscData?.data.meta.am32.fileName ?? 'ERROR'}_${cleanTag}.hex`);
         const currentAsset = assets.value?.find(a => a === `AM32_${escStore.firstValidEscData?.data.meta.am32.fileName ?? 'ERROR'}_${cleanTag}.hex`);
         selectedAsset.value = currentAsset ?? 'NOT FOUND';
     }
@@ -485,8 +492,10 @@ const fetchPairedDevices = async () => {
             serialStore.selectLastDevice();
         }
     } else {
+        // The browser has forgotten the port. Tear the session down rather than
+        // just clearing the flags, or the transport keeps its reader.
         if (serialStore.hasConnection) {
-            serialStore.$reset();
+            await escSession.disconnect();
         }
         serialStore.selectedDevice = {
             id: '-1',
@@ -501,6 +510,12 @@ useIntervalFn(() => {
     fetchPairedDevices();
 }, 500);
 
+const findSelectedPort = async (): Promise<SerialPort | null> => {
+    const [vendorId, productId] = serialStore.selectedDevice.id.split(':');
+    const ports = await navigator.serial.getPorts();
+    return ports.find(p => p.getInfo().usbVendorId === +vendorId && p.getInfo().usbProductId === +productId) ?? null;
+};
+
 const connectToDevice = async () => {
     const router = useRouter();
     if (!router.currentRoute.value.fullPath.startsWith('/configurator')) {
@@ -508,254 +523,85 @@ const connectToDevice = async () => {
             path: '/configurator'
         });
     }
-    const portTmp: string[] | undefined = serialStore.selectedDevice?.id.split(':');
-    if (portTmp) {
-        const ports = await navigator.serial.getPorts();
-        for (const p of ports) {
-            if (p.getInfo().usbVendorId === +portTmp[0] && p.getInfo().usbProductId === +portTmp[1]) {
-                serialStore.deviceHandles.port = p;
-                break;
-            }
-        }
-        if (!serialStore.deviceHandles.port) {
-            logError('Serial port not found');
-        } else {
-            try {
-                // Opens the port and stands up the link layer over am32-web's
-                // WebSerialTransport. It owns the reader and the writer for the
-                // whole session -- see packages/am32-web.
-                await Serial.init(log, logError, logWarning, serialStore.deviceHandles.port, +baudrate.value);
-            } catch (e: any) {
-                logError(`Could not open serial port: ${e.message}`);
-                toast.add({
-                    icon: 'i-material-symbols-mimo-disconnect-outline',
-                    title: 'Error',
-                    color: 'red',
-                    description: 'Port already in use, please free device and try again!'
-                });
-                throw new Error(`${e.message}`);
-            }
 
-            if (Serial.isOpen) {
-                log('Connected to device');
-
-                // ArduPilot only hands the USB/MAVLink port to MSP/BLHeli after
-                // ~4s with no inbound MAVLink (GCS_MAVLink alternative protocol).
-                // Close Mission Planner/QGC first; then wait here before MSP.
-                log('Waiting 4.5s for ArduPilot MSP window (no MAVLink on this port)...');
-                const waitUntil = Date.now() + 4500;
-                while (Date.now() < waitUntil) {
-                    await Serial.drain(50, 100);
-                    await delay(200);
-                }
-                await Serial.drain();
-
-                let result = null as Awaited<ReturnType<typeof Msp.prototype.sendWithPromise>> | null;
-                for (let attempt = 1; attempt <= 5; attempt++) {
-                    try {
-                        result = await Msp.getInstance().sendWithPromise(MSP_COMMANDS.MSP_API_VERSION);
-                        break;
-                    } catch (err: any) {
-                        logError(`MSP_API_VERSION try ${attempt}/5: ${err.message}`);
-                        await Serial.drain();
-                        await delay(500);
-                    }
-                }
-
-                if (!result) {
-                    logError('trying to exit fourway and try again.');
-                    serialStore.isFourWay = true;
-                    await FourWay.getInstance().sendWithPromise(FOUR_WAY_COMMANDS.cmd_InterfaceExit).catch(() => null);
-                    await delay(1000);
-                    serialStore.isFourWay = false;
-                    await Serial.drain();
-                    result = await Msp.getInstance().sendWithPromise(MSP_COMMANDS.MSP_API_VERSION).catch(() => {
-                        logError('Not in four way mode? Close all GCS apps, unplug/replug USB, wait 5s after Connect.');
-                        return null;
-                    });
-                }
-
-                if (result === null) {
-                    await disconnectFromDevice();
-
-                    throw new Error('Cant read or write to device!');
-                }
-
-                commandsQueue.processMspResponse(result!.commandName, result!.data);
-
-                await Msp.getInstance().sendWithPromise(MSP_COMMANDS.MSP_FC_VARIANT).then((result) => {
-                    if (result) {
-                        commandsQueue.processMspResponse(result!.commandName, result!.data);
-                    }
-                });
-                await Msp.getInstance().sendWithPromise(MSP_COMMANDS.MSP_BATTERY_STATE).then((result) => {
-                    if (result) {
-                        commandsQueue.processMspResponse(result!.commandName, result!.data);
-                    }
-                });
-                await Msp.getInstance().sendWithPromise(Msp.getInstance().getTypeMotorCommand(serialStore.mspData.type)).then((result) => {
-                    if (result) {
-                        commandsQueue.processMspResponse(result!.commandName, result!.data);
-                    }
-                });
-
-                const passthroughResult = await Msp.getInstance().sendWithPromise(MSP_COMMANDS.MSP_SET_PASSTHROUGH);
-
-                await delay(2000);
-
-                serialStore.isFourWay = true;
-
-                escStore.expectedCount = passthroughResult?.data.getUint8(0) ?? 0;
-                log(`Passthrough ready, ESC count from FC: ${escStore.expectedCount}`);
-
-                serialStore.hasConnection = true;
-            } else {
-                logError('Something went wrong!');
-            }
-        }
+    const port = await findSelectedPort();
+    if (!port) {
+        logError('Serial port not found');
+        return;
     }
+
+    // One call: the session opens the port, probes MSP immediately and only sits
+    // out ArduPilot's MAVLink idle window if it has to. The unconditional 4.5 s
+    // wait every connect used to pay was audit item H.
+    await escSession.connect(port, +baudrate.value);
 };
 
+const disconnectFromDevice = async () => {
+    await escSession.disconnect();
+};
+
+/**
+ * Read every ESC, then apply the two recovery policies the app has always had.
+ *
+ * Both used to sit below an enumerate loop that dereferenced `.data` on channels
+ * that had failed, so one dead ESC threw a `TypeError` out of this handler and
+ * neither policy ran at all (audit item **B**). They now only ever look at
+ * channels that came back.
+ */
 const connectToEsc = async () => {
-    if (!serialStore.isFourWay) {
-        const result = await Msp.getInstance().sendWithPromise(MSP_COMMANDS.MSP_SET_PASSTHROUGH);
-
-        await delay(2000);
-
-        serialStore.isFourWay = true;
-
-        escStore.expectedCount = result?.data.getUint8(0) ?? 0;
+    const results = await escSession.readAll();
+    if (results.length === 0) {
+        return;
     }
 
-    escData.value = [];
-    escStore.count = 0;
-    escStore.isLoading = true;
+    const healthy = escStore.escData.filter(e => !e.isError && e.data);
 
-    // Brief settle after MSP_SET_PASSTHROUGH before hammering soft-serial.
-    await delay(500);
+    // A fresh or half-flashed ESC: an EEPROM page that is all 0xFF or all zero.
+    const isBlank = (buffer: Uint8Array) =>
+        buffer.length === 0 ||
+        buffer.every(b => b === 0xFF) ||
+        buffer.reduce((acc, cur) => acc + cur, 0) === 0;
 
-    for (let i = 0; i < escStore.expectedCount; ++i) {
-        const newEscData = {
-            isLoading: true,
-            isError: false
-        } as EscData;
-        escData.value.push(newEscData);
-
-        try {
-            // Use the same retry budget as post-flash re-read (was 2 by default).
-            const result = await FourWay.getInstance().getInfo(i, 10);
-            escStore.escData[i].data = result;
-            escStore.count += 1;
-        } catch (e) {
-            console.error(e);
-            logError(`ESC #${i + 1} failed to enumerate`);
-            newEscData.isError = true;
-        }
-
-        newEscData.isLoading = false;
-
-        // Inter-ESC settle: avoids leftover soft-serial state / host RX
-        // contamination that disproportionately kills the last channel.
-        if (i < escStore.expectedCount - 1) {
-            await delay(300);
-        }
-    }
-
-    escStore.isLoading = false;
-
-    if (
-        escStore.escData.filter(
-            e => e.data.settingsBuffer.filter(s => s === 0xFF).length === e.data.settingsBuffer.length ||
-                  e.data.settingsBuffer.reduce((acc, cur) => acc + cur, 0) === 0
-        ).length > 0
-    ) {
+    if (healthy.some(e => isBlank(e.data.settingsBuffer))) {
         toast.add({
             title: 'Error',
             color: 'red',
             description: 'Found empty settings, flashing default settings now!'
         });
 
-        savingOrApplyingSelectedEscs.value = escStore.escData.map((_, i) => i + 1);
+        savingOrApplyingSelectedEscs.value = escStore.escData
+            .map((e, i) => (!e.isError && e.data ? i + 1 : 0))
+            .filter(n => n > 0);
 
-        applyDefaultConfig();
+        await applyDefaultConfig();
+        return;
     }
 
-    let needToSave = false;
+    // AM32 2.19 shipped with a TIMING_ADVANCE that means something different from
+    // what it meant before, so a value carried over from an older EEPROM is wrong.
+    const needsTimingFix = healthy.some((e) => {
+        const version = `${e.data.settings.MAIN_REVISION}.${e.data.settings.SUB_REVISION}`;
+        return version.endsWith('2.19') && (e.data.settings.TIMING_ADVANCE as number) < 10;
+    });
 
-    for (const esc of escStore.escData) {
-        const firmwareVersion = `${esc.data.settings.MAIN_REVISION}.${esc.data.settings.SUB_REVISION}`;
-        if (firmwareVersion.endsWith('2.19')) {
-            if (esc.data.settings.TIMING_ADVANCE as number < 10) {
-                needToSave = true;
-                for (let i = 0; i < escStore.escData.length; ++i) {
-                    escStore.escData[i].data.settingsDirty = true;
-                    escStore.escData[i].data.settings.TIMING_ADVANCE = 16;
-                }
-            }
+    if (needsTimingFix) {
+        for (const esc of healthy) {
+            esc.data.settings.TIMING_ADVANCE = 16;
+            esc.data.settingsDirty = true;
         }
-    }
-
-    if (needToSave) {
-        await writeConfig();
-        toast.add({
-            title: 'Info',
-            color: 'blue',
-            description: 'Eeprom upgraded. Adjusted settings, saved and applied!'
-        });
+        if (await escSession.saveDirtySettings()) {
+            toast.add({
+                title: 'Info',
+                color: 'blue',
+                description: 'Eeprom upgraded. Adjusted settings, saved and applied!'
+            });
+        }
     }
 };
 
 const writeConfig = async () => {
-    if (serialStore.isFourWay) {
-        escStore.isSaving = true;
-
-        for (let i = 0; i < escStore.escData.length; ++i) {
-            if (!escStore.escData[i].isError && escStore.escData[i].data.settingsDirty) {
-                const result = await FourWay.getInstance().writeSettings(i, escStore.escData[i].data).catch((err) => {
-                    logError(`Error writing settings to ESC #${i + 1}: ${err.message}`);
-                    escStore.escData[i].isError = true;
-                    return null;
-                });
-                if (result) {
-                    escStore.escData[i].data.settingsBuffer = result;
-                    escStore.escData[i].data.settingsDirty = false;
-                }
-            }
-        }
-        escStore.isSaving = false;
-        escStore.settingsDirty = false;
-    }
+    await escSession.saveDirtySettings();
 };
-
-const disconnectFromDevice = async () => {
-    if (serialStore.deviceHandles.port) {
-        if (serialStore.isFourWay) {
-            await FourWay.getInstance().send(FOUR_WAY_COMMANDS.cmd_InterfaceExit);
-        }
-
-        // Stops the read loop, releases the reader and writer locks and closes
-        // the port -- in that order, and it waits for the loop to actually exit.
-        // The old path closed the port and left the loop spinning (audit E).
-        await Serial.deinit();
-
-        serialStore.$reset();
-
-        escStore.$reset();
-
-        log('Connection to device closed');
-    }
-};
-
-/*
-const startLocalFlash = async (event: Event) => {
-    if (event.target instanceof HTMLInputElement) {
-        const file: File | undefined = event.target.files?.[0];
-        if (file) {
-
-        }
-    }
-};
-*/
 
 const selectFile = (event: Event | FileList) => {
     if (event instanceof Event && event.target instanceof HTMLInputElement && event.target.files?.[0]) {
@@ -767,109 +613,83 @@ const selectFile = (event: Event | FileList) => {
 
 const startModalFlash = async () => {
     if (currentTab.value === 0) {
-        const url = releases.value?.[0].children.find(c => c.name === selectedRelease.value)?.files.find(f => f.name === selectedAsset.value)?.url;
-        if (url) {
-            const dbEntry = await db.downloads.where('url').equals(url).first();
-
-            escStore.activeTarget = 0;
-            escStore.step = 'Downloading';
-
-            if (dbEntry) {
-                return startFlash(dbEntry.text);
-            }
-
-            const file: Response = await fetch(url);
-            const blob = await file.blob();
-            const data = await blob.text();
-            if (blob && typeof data === 'string') {
-                await db.downloads.add({
-                    url,
-                    text: data
-                });
-
-                startFlash(data);
-            }
+        const url = releases.value?.[0]?.children.find(c => c.name === selectedRelease.value)?.files.find(f => f.name === selectedAsset.value)?.url;
+        if (!url) {
+            return;
         }
-    } else if (currentTab.value === 1) {
-        const logStore = useLogStore();
-        if (fileInput.value) {
-            if (!ignoreMcuLayout.value && escStore.firstValidEscData) {
-                const mcu = new Mcu(escStore.firstValidEscData.data.meta.signature);
-                const eepromOffset = mcu.getEepromOffset();
-                const offset = 0x8000000;
-                const fileNamePlaceOffset = 30;
 
-                const fileFlash = parseHex(await fileInput.value.text());
-                const tmp = escStore.firstValidEscData.data.meta.am32;
-                if (fileFlash && tmp.mcuType && tmp.fileName) {
-                    const findFileNameBlock = fileFlash.data.find(d =>
-                        (eepromOffset - fileNamePlaceOffset) > (d.address - offset) && (eepromOffset - fileNamePlaceOffset) < (d.address - offset + d.bytes)
-                    );
-                    if (!findFileNameBlock) {
-                        logStore.logError('File name not found in hex, probably too old!');
-                        throw new Error('File name not found in hex file.');
-                    }
-
-                    const hexFileName = new TextDecoder().decode(new Uint8Array(findFileNameBlock.data).slice(0, findFileNameBlock.data.indexOf(0x00)));
-                    if (!hexFileName.endsWith(tmp.mcuType)) {
-                        logStore.logError('Invalid MCU type in hex file.');
-                        throw new Error('Invalid MCU type in hex file.');
-                    }
-
-                    const currentFileName = hexFileName.slice(0, hexFileName.lastIndexOf('_'));
-                    const expectedFileName = tmp.fileName.slice(0, tmp.fileName.lastIndexOf('_'));
-                    if (currentFileName !== expectedFileName) {
-                        logStore.logError('Layout does not match! Aborting flash!');
-                        logStore.logError(`Expected: ${expectedFileName}, given: ${currentFileName}`);
-                        throw new Error('Layout does not match! Aborting flash!');
-                    }
-                }
+        escStore.step = 'Downloading';
+        try {
+            const cached = await db.downloads.where('url').equals(url).first();
+            if (cached) {
+                await startFlash(cached.text);
+                return;
             }
-            startFlash(await fileInput.value.text());
+
+            const text = await (await fetch(url)).text();
+            await db.downloads.add({ url, text });
+            await startFlash(text);
+        } catch (error: any) {
+            // A download that fails must not leave the modal locked, which is the
+            // same defect as audit item G one step earlier in the path.
+            escStore.step = '';
+            toast.add({
+                title: 'Download failed',
+                color: 'red',
+                description: error.message
+            });
         }
+    } else if (currentTab.value === 1 && fileInput.value) {
+        await startFlash(await fileInput.value.text());
     }
 };
 
+/**
+ * Flash the selected ESCs.
+ *
+ * The MCU-layout check that used to live here is inside `session.flash()` now,
+ * where it compares the hex against the *target* channel's own firmware name
+ * rather than against ESC #1's. `ignoreMcuLayout` is the caller's opt-out.
+ *
+ * A failure surfaces as a toast and releases the modal instead of wedging it open
+ * -- audit item **G**. The release happens in `useEscSession.flashTargets`'s
+ * `finally`, so it cannot be forgotten by a call site.
+ */
 const startFlash = async (hexString: string) => {
-    for (const n of savingOrApplyingSelectedEscs.value) {
-        const i = n - 1;
-        escStore.activeTarget = i;
-        // No timeout argument any more: the core's TimeoutPolicy derives one per
-        // page write from the FC's own budget. This call site passing 200 ms was
-        // audit item C.
-        await FourWay.getInstance().writeHex(i, hexString);
-        await delay(200);
-        escStore.step = 'Resetting';
-        await FourWay.getInstance().reset(i);
-        await delay(5000);
-        escStore.step = 'Read ESC';
-        try {
-            const result = await FourWay.getInstance().getInfo(i, 20);
+    const targets = savingOrApplyingSelectedEscs.value.map(n => n - 1);
+    const flashed = await escSession.flashTargets(hexString, targets, {
+        allowMcuMismatch: ignoreMcuLayout.value
+    });
 
-            escStore.escData[i].data = result;
-            escStore.escData[i].isLoading = false;
-        } catch (e) {
-            console.error(e);
-        }
+    if (!flashed) {
+        return;
     }
-    escStore.step = '';
-    escStore.bytesWritten = 0;
-    escStore.totalBytes = 0;
-    escStore.activeTarget = -1;
-    flashModalOpen.value = false;
 
+    flashModalOpen.value = false;
+    toast.add({
+        title: 'Success',
+        color: 'green',
+        description: `Flashed ${targets.length} ESC(s)`
+    });
+
+    // The session already re-read each ESC it flashed; this re-runs the fresh-EEPROM
+    // and 2.19 recovery policies over the whole board, which is what the old flash
+    // path did by calling straight back into the read handler.
     await connectToEsc();
-    /* if (file_input.value) {
-        file_input.value.value = '';
-    } */
 };
 
 const applyDefaultConfig = async () => {
-    let eepromVersion = escStore.firstValidEscData?.data.settings.LAYOUT_REVISION as number;
+    const first = escStore.firstValidEscData?.data;
+    if (!first) {
+        return;
+    }
+
+    let eepromVersion = first.settings.LAYOUT_REVISION as number;
     if (eepromVersion > 3) {
         eepromVersion = 2;
     }
-    const eepromUrl = await fetch(`/api/eeprom/${escStore.firstValidEscData?.data.meta.am32.fileName}?version=${eepromVersion}`)
+
+    const eepromUrl = await fetch(`/api/eeprom/${first.meta.am32.fileName}?version=${eepromVersion}`)
         .then((res) => {
             if (res.status === 200) {
                 return res.text();
@@ -879,30 +699,22 @@ const applyDefaultConfig = async () => {
         .catch(() => null);
 
     if (!eepromUrl) {
-        throw new Error('Eeprom not found');
+        toast.add({
+            title: 'Error',
+            color: 'red',
+            description: 'Default eeprom not found'
+        });
+        return;
     }
 
     const file = await fetch(eepromUrl).then(res => res.arrayBuffer());
+    const settings: EscSettings = escSession.decodeSettingsFile(new Uint8Array(file), eepromVersion);
 
-    if (file) {
-        const buffer = new Uint8Array(file);
-        const settings = decodeSettings(buffer, eepromVersion);
+    settings.STARTUP_MELODY = (new Array(128)).fill(0xFF);
 
-        settings.STARTUP_MELODY = (new Array(128)).fill(0xFF);
+    await escSession.applySettings(settings, savingOrApplyingSelectedEscs.value);
 
-        for (const n of savingOrApplyingSelectedEscs.value) {
-            escStore.escData[n - 1].data.settings = settings;
-            escStore.escData[n - 1].data.settingsDirty = true;
-        }
-
-        await writeConfig().catch((err) => {
-            logError(err.message);
-        });
-
-        if (applyDefaultConfigModalOpen.value) {
-            applyDefaultConfigModalOpen.value = false;
-        }
-    }
+    applyDefaultConfigModalOpen.value = false;
 
     if (applyConfigFile.value) {
         applyConfigFile.value.input.value = '';
@@ -911,7 +723,11 @@ const applyDefaultConfig = async () => {
 
 const downloadEscConfig = () => {
     for (const n of savingOrApplyingSelectedEscs.value) {
-        const blob = new Blob([escStore.escData[n - 1].data.settingsBuffer.buffer as ArrayBuffer], {
+        const buffer = escStore.escData[n - 1]?.data?.settingsBuffer;
+        if (!buffer) {
+            continue;
+        }
+        const blob = new Blob([buffer.buffer as ArrayBuffer], {
             type: 'application/octet-stream'
         });
         const link = document.createElement('a');
@@ -923,23 +739,20 @@ const downloadEscConfig = () => {
 };
 
 const applyConfig = async () => {
-    if (applyConfigFile.value.input.files.length === 1) {
-        const file: File = applyConfigFile.value.input.files[0];
-        if (file) {
-            const buffer = new Uint8Array(await file.arrayBuffer());
-            const settings = decodeSettings(buffer, escStore.firstValidEscData?.data.settings.LAYOUT_REVISION as number);
-
-            for (const n of savingOrApplyingSelectedEscs.value) {
-                escStore.escData[n - 1].data.settings = settings;
-                escStore.escData[n - 1].data.settingsDirty = true;
-            }
-
-            await writeConfig();
-        }
-
-        if (applyConfigFile.value) {
-            applyConfigFile.value.input.value = '';
-        }
+    const files: FileList | undefined = applyConfigFile.value?.input?.files;
+    if (!files || files.length !== 1) {
+        return;
     }
+
+    const buffer = new Uint8Array(await files[0].arrayBuffer());
+    const settings = escSession.decodeSettingsFile(
+        buffer,
+        escStore.firstValidEscData?.data.settings.LAYOUT_REVISION as number
+    );
+
+    await escSession.applySettings(settings, savingOrApplyingSelectedEscs.value);
+
+    applyConfigFile.value.input.value = '';
+    applyConfigModalOpen.value = false;
 };
 </script>

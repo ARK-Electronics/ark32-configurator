@@ -6307,7 +6307,6 @@ __metadata:
     octokit: "npm:^3.1.2"
     pinia: "npm:^2.1.7"
     prisma: "npm:^7.5.0"
-    queue: "npm:^7.0.0"
     semver: "npm:^7.6.0"
     tsx: "npm:^4.21.0"
     typescript: "npm:^5.5.4"
@@ -14773,13 +14772,6 @@ __metadata:
   version: 1.2.3
   resolution: "queue-microtask@npm:1.2.3"
   checksum: 10c0/900a93d3cdae3acd7d16f642c29a642aea32c2026446151f0778c62ac089d4b8e6c986811076e1ae180a694cedf077d453a11b58ff0a865629a4f82ab558e102
-  languageName: node
-  linkType: hard
-
-"queue@npm:^7.0.0":
-  version: 7.0.0
-  resolution: "queue@npm:7.0.0"
-  checksum: 10c0/ad88d379fc054b6987ac89602912c6cb22d95c7c2a6c7a4550692fa07a0e60491aeaaa70d4d8b4a83ac9c72555ebebc7c7b6a67bc5f70ee756565a3ce3abc183
   languageName: node
   linkType: hard
 

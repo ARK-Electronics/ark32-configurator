@@ -1,7 +1,22 @@
 import { defineStore, acceptHMRUpdate } from 'pinia';
-import type { Msp } from '~/src/communication/msp';
-import type { FourWay } from '~/src/communication/four_way';
+import type { FcInfo } from 'am32-core/session';
 
+/**
+ * Everything the UI needs to know about the serial link, and nothing more.
+ *
+ * Block 5 emptied this out. It used to hold a `deviceHandles` record with a
+ * reader, a writer and two protocol-class instances, plus a `refreshReader()`
+ * that grabbed a second reader behind the transport's back -- all of it audit
+ * item **I**, all of it unused since block 2 moved stream ownership into
+ * `am32-web`'s transport. `mspData` is gone the same way: `FcInfo` from the
+ * session carries the variant, the API version, the motor count, the battery and
+ * the quirks, and it is produced by the same code the CLI runs.
+ *
+ * `hasConnection` and `isFourWay` are **mirrors of the session's state**, written
+ * only by `useEscSession`'s event handler. Nothing else may set them: they used
+ * to be poked by hand at each call site, which is how `isFourWay` came to be set
+ * true before `MSP_SET_PASSTHROUGH` was known to have succeeded.
+ */
 export const useSerialStore = defineStore('serial', () => {
     const hasConnection = ref(false);
     const hasSerial = ref(true);
@@ -14,25 +29,25 @@ export const useSerialStore = defineStore('serial', () => {
         id: '-1',
         label: 'Select device'
     });
-    // The port is the only handle the store still needs: block 2 moved the
-    // stream, the reader and the writer into am32-web's WebSerialTransport,
-    // which owns them for the lifetime of the connection. `reader`, `writer`,
-    // `msp` and `fourWay` are unused already -- audit item I, block 5.
-    const deviceHandles = ref<{
-        port: SerialPort | null,
-        reader: ReadableStreamDefaultReader | null,
-        writer: WritableStreamDefaultWriter | null,
-        msp: Msp | null,
-        fourWay: FourWay | null
-    }>({
-        port: null,
-        reader: null,
-        writer: null,
-        msp: null,
-        fourWay: null
-    });
 
-    const mspData = ref<MspData>({} as MspData);
+    /**
+     * The port the user picked, kept only so the UI can tell whether one is
+     * chosen. The reader and the writer belong to the transport for the lifetime
+     * of the connection.
+     */
+    const port = ref<SerialPort | null>(null);
+
+    /** What `connect()` found. Null until then. */
+    const fc = ref<FcInfo | null>(null);
+
+    /**
+     * `MSP_MOTOR_CONFIG` byte 6, the authoritative motor count on both firmwares.
+     *
+     * Not the same number as the session's ESC count, which comes from the
+     * `MSP_SET_PASSTHROUGH` reply and is how many channels the FC will let us
+     * address. On Betaflight the two can differ.
+     */
+    const motorCount = computed(() => fc.value?.motorCount ?? 0);
 
     function addSerialDevices (devices: SerialPort[]) {
         pairedDevices.value = [
@@ -44,29 +59,14 @@ export const useSerialStore = defineStore('serial', () => {
         selectedDevice.value = pairedDevicesOptions.value[pairedDevicesOptions.value.length - 1];
     }
 
-    const refreshReader = () => {
-        if (deviceHandles.value.port?.readable) {
-            deviceHandles.value.reader = deviceHandles.value.port.readable.getReader();
-        } else {
-            throw new Error('port or read stream not available');
-        }
-        return deviceHandles.value.reader;
-    };
-
     function $reset () {
         hasConnection.value = false;
         isFourWay.value = false;
-        deviceHandles.value = {
-            port: null,
-            reader: null,
-            writer: null,
-            msp: null,
-            fourWay: null
-        };
-        mspData.value = {} as MspData;
+        port.value = null;
+        fc.value = null;
     }
 
-    return { refreshReader, mspData, isFourWay, hasConnection, hasSerial, addSerialDevices, selectLastDevice, pairedDevices, pairedDevicesOptions, selectedDevice, deviceHandles, $reset };
+    return { fc, motorCount, isFourWay, hasConnection, hasSerial, addSerialDevices, selectLastDevice, pairedDevices, pairedDevicesOptions, selectedDevice, port, $reset };
 });
 
 export type SerialStore = ReturnType<typeof useSerialStore>

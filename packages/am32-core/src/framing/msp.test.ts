@@ -286,6 +286,28 @@ describe('streaming parser', () => {
         expect(frames.map(f => f.command)).toEqual([MSP_COMMANDS.MSP_API_VERSION]);
     });
 
+    it('discards garbage that cannot start a frame instead of accumulating it', () => {
+        const parser = new MspParser();
+        for (let i = 0; i < 100; i += 1) {
+            expect(parser.push(bytes(0x01, 0x02, 0x03, 0x04))).toEqual([]);
+        }
+        // A frame arriving after 400 bytes of noise still parses, and nothing
+        // ahead of it is prepended to its payload.
+        const frame = encodeMspV1(MSP_COMMANDS.MSP_API_VERSION, bytes(3), 'response');
+        const frames = parser.push(frame);
+        expect(frames.length).toBe(1);
+        expect(Array.from(frames[0]!.payload)).toEqual([3]);
+    });
+
+    it('keeps a trailing $ that might begin the next frame', () => {
+        const parser = new MspParser();
+        const frame = encodeMspV1(MSP_COMMANDS.MSP_API_VERSION, bytes(5), 'response');
+        expect(parser.push(new Uint8Array([0xAA, ...frame.subarray(0, 1)]))).toEqual([]);
+        const frames = parser.push(frame.subarray(1));
+        expect(frames.length).toBe(1);
+        expect(Array.from(frames[0]!.payload)).toEqual([5]);
+    });
+
     it('does not leak state between resets', () => {
         const parser = new MspParser();
         parser.push(bytes(0x24, 0x4D, 0x3E, 0x05));

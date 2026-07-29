@@ -332,6 +332,9 @@ export class MspParser {
         for (;;) {
             const start = this.findHeader();
             if (start < 0) {
+                // Nothing left that could begin a frame: drop it rather than
+                // carrying garbage forward into the next chunk forever.
+                this.buffer = new Uint8Array();
                 return frames;
             }
             if (start > 0) {

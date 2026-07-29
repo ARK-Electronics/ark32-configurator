@@ -160,11 +160,12 @@ export const ARDUPILOT_PROFILE: FcProfile = {
 export const BETAFLIGHT_PROFILE: FcProfile = {
     name: 'betaflight',
     fcVariant: 'BTFL',
+    // Betaflight 4.5, which is what is on hardware in the field. `master` is at
+    // API 1.48 and has moved `MSP_FC_VERSION` to a calendar-versioned layout
+    // with a trailing Pascal string; the 3-byte `{major, minor, patch}` form
+    // below is what a shipped release sends. Nothing the configurator does
+    // reads either field, so the simulator models the one on real boards.
     apiVersion: [0, 1, 46],
-    // The 3-byte `{major, minor, patch}` form, which is what shipped Betaflight
-    // releases send. Master has since moved to a calendar-versioned layout with
-    // a trailing Pascal string; nothing the configurator does reads this field,
-    // so the simulator models the form real hardware in the field emits.
     fcVersion: [4, 5, 0],
     mavlinkIdleMs: 0,
     blockingFourWay: true,

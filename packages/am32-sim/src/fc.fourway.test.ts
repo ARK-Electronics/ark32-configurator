@@ -420,3 +420,152 @@ describe('SimFc: commands the AM32 bootloader does not implement', () => {
         }
     });
 });
+
+describe('SimFc: the rest of the 4-way command set', () => {
+    it('answers the four interface commands with each firmware\'s own values', async () => {
+        for (const profile of ['ardupilot', 'betaflight'] as const) {
+            const h = rig({ profile, escCount: 1 });
+            await connect(h);
+
+            const version = await raw(h, FOUR_WAY_COMMANDS.cmd_ProtocolGetVersion);
+            expect(Array.from((version as FourWayResponse).params))
+                .toEqual([profile === 'ardupilot' ? 107 : 108]);
+
+            const name = await raw(h, FOUR_WAY_COMMANDS.cmd_InterfaceGetName);
+            const nameBytes = Array.from((name as FourWayResponse).params);
+            // ArduPilot sends a length-prefixed Pascal string, Betaflight nine
+            // raw characters. A host that assumes one shape mis-reads the other.
+            expect(nameBytes).toEqual(profile === 'ardupilot'
+                ? [0x04, 0x41, 0x52, 0x44, 0x55]
+                : Array.from('m4wFCIntf').map(c => c.charCodeAt(0)));
+
+            const interfaceVersion = await raw(h, FOUR_WAY_COMMANDS.cmd_InterfaceGetVersion);
+            expect(Array.from((interfaceVersion as FourWayResponse).params))
+                .toEqual([200, profile === 'ardupilot' ? 5 : 6]);
+
+            const alive = await raw(h, FOUR_WAY_COMMANDS.cmd_InterfaceTestAlive);
+            // Nothing is connected yet, and only ArduPilot says so (AP:981-982
+            // vs BF:505, where the whole body is skipped).
+            expect((alive as FourWayResponse).ack).toBe(profile === 'ardupilot'
+                ? FOUR_WAY_ACK.ACK_D_GENERAL_ERROR
+                : FOUR_WAY_ACK.ACK_OK);
+
+            await initFlash(h, 0);
+            expect(((await raw(h, FOUR_WAY_COMMANDS.cmd_InterfaceTestAlive)) as FourWayResponse).ack)
+                .toBe(FOUR_WAY_ACK.ACK_OK);
+        }
+    });
+
+    it('range-checks cmd_InterfaceSetMode on Betaflight and not at all on ArduPilot', async () => {
+        const bf = rig({ profile: 'betaflight', escCount: 1 });
+        await connect(bf);
+        expect(((await raw(bf, FOUR_WAY_COMMANDS.cmd_InterfaceSetMode, [4])) as FourWayResponse).ack)
+            .toBe(FOUR_WAY_ACK.ACK_OK);
+        expect(((await raw(bf, FOUR_WAY_COMMANDS.cmd_InterfaceSetMode, [9])) as FourWayResponse).ack)
+            .toBe(FOUR_WAY_ACK.ACK_I_INVALID_PARAM);
+
+        const ardu = rig({ profile: 'ardupilot', escCount: 1 });
+        await connect(ardu);
+        const accepted = await raw(ardu, FOUR_WAY_COMMANDS.cmd_InterfaceSetMode, [9]);
+        expect((accepted as FourWayResponse).ack).toBe(FOUR_WAY_ACK.ACK_OK);
+        expect(Array.from((accepted as FourWayResponse).params)).toEqual([9]);
+    });
+
+    it('echoes a different address for cmd_DevicePageErase on each firmware', async () => {
+        for (const profile of ['ardupilot', 'betaflight'] as const) {
+            const h = rig({ profile, escCount: 1 });
+            await connect(h);
+            await initFlash(h, 0);
+
+            const response = await raw(h, FOUR_WAY_COMMANDS.cmd_DevicePageErase, [8]);
+            const frame = response as FourWayResponse;
+
+            expect(frame.ack).toBe(FOUR_WAY_ACK.ACK_OK);
+            expect(Array.from(frame.params)).toEqual([8]);
+            // Betaflight echoes the computed page * 1024 (BF:675-680);
+            // ArduPilot forces 0x0000 (AP:1122).
+            expect(frame.address).toBe(profile === 'betaflight' ? 8 << 10 : 0);
+            // And on AM32 it erased nothing either way -- CMD_ERASE_FLASH is a
+            // stub. The erase that matters is the one inside a page-aligned
+            // write.
+            expect(h.escs[0]!.counts.erase).toBe(1);
+        }
+    });
+
+    it('rejects cmd_DeviceReset above the motor count and resets below it', async () => {
+        for (const profile of ['ardupilot', 'betaflight'] as const) {
+            const h = rig({ profile, escCount: 2 });
+            await connect(h);
+            await initFlash(h, 0);
+            expect(h.escs[0]!.isConnected).toBe(true);
+
+            const bad = await raw(h, FOUR_WAY_COMMANDS.cmd_DeviceReset, [5]);
+            expect((bad as FourWayResponse).ack).toBe(FOUR_WAY_ACK.ACK_I_INVALID_CHANNEL);
+
+            const good = await raw(h, FOUR_WAY_COMMANDS.cmd_DeviceReset, [1]);
+            expect((good as FourWayResponse).ack).toBe(FOUR_WAY_ACK.ACK_OK);
+            // ArduPilot echoes the channel (AP:1048); Betaflight's untouched
+            // `Dummy.word = 0` default sends a zero whatever was asked for.
+            expect(Array.from((good as FourWayResponse).params))
+                .toEqual([profile === 'ardupilot' ? 1 : 0]);
+            expect(h.escs[1]!.counts.reset).toBe(1);
+        }
+    });
+
+    it('has Betaflight hold the line low for 300 ms when the request asks for a hard reboot', async () => {
+        // ADDR_L == 1 makes Betaflight busy-wait 300 ms with the ESC signal pin
+        // low (BF:604-611). ArduPilot has no equivalent, which is why the
+        // timeout policy's cmd_DeviceReset budget covers the worse of the two.
+        const bf = rig({ profile: 'betaflight', escCount: 1 });
+        await connect(bf);
+        await initFlash(bf, 0);
+        let start = bf.clock.now();
+        await raw(bf, FOUR_WAY_COMMANDS.cmd_DeviceReset, [0], 0x0001);
+        expect(bf.clock.now() - start).toBeGreaterThanOrEqual(300);
+
+        const ardu = rig({ profile: 'ardupilot', escCount: 1 });
+        await connect(ardu);
+        await initFlash(ardu, 0);
+        start = ardu.clock.now();
+        await raw(ardu, FOUR_WAY_COMMANDS.cmd_DeviceReset, [0], 0x0001);
+        expect(ardu.clock.now() - start).toBeLessThan(300);
+    });
+});
+
+describe('the ACK_OK that is not a success', () => {
+    it('has ArduPilot answer a failed read with ACK_OK and one meaningless byte', async () => {
+        // BL_ReadA returns false at AP:786 without touching blheli.ack when the
+        // CMD_SET_ADDRESS handshake fails (AP:749-761), so the reply is ACK_OK
+        // carrying one uninitialised stack byte. This is block 1b's still-open
+        // "a short read looks like success" hazard in its sharpest form: block 4
+        // must not treat ACK_OK alone as proof that a read returned data.
+        const ardu = rig({ profile: 'ardupilot', escCount: 1 });
+        await connect(ardu);
+        await initFlash(ardu, 0);
+        ardu.escs[0]!.unresponsive = true;
+
+        const response = await raw(
+            ardu,
+            FOUR_WAY_COMMANDS.cmd_DeviceRead,
+            [EEPROM_SIZE],
+            ardu.escs[0]!.eepromOffset
+        );
+        const frame = response as FourWayResponse;
+
+        expect(frame.ack).toBe(FOUR_WAY_ACK.ACK_OK);
+        expect(frame.params).toHaveLength(1);
+
+        // Betaflight reports the failure honestly on the same input.
+        const bf = rig({ profile: 'betaflight', escCount: 1 });
+        await connect(bf);
+        await initFlash(bf, 0);
+        bf.escs[0]!.unresponsive = true;
+        const bfFrame = await raw(
+            bf,
+            FOUR_WAY_COMMANDS.cmd_DeviceRead,
+            [EEPROM_SIZE],
+            bf.escs[0]!.eepromOffset
+        ) as FourWayResponse;
+        expect(bfFrame.ack).toBe(FOUR_WAY_ACK.ACK_D_GENERAL_ERROR);
+    });
+});

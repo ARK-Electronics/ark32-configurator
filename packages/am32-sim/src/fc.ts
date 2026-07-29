@@ -810,8 +810,8 @@ export class SimFc implements SimEndpoint {
 
         const failed = addressed.ack !== 'ok' || erased.ack !== 'ok';
         // ArduPilot discards `BL_PageErase`'s return value, so it reports
-        // success whatever happened (AP:1121).
-        const ack = failed && this.profile.pageEraseEchoesAddress
+        // success whatever happened (AP:1121); Betaflight reports it (BF:681).
+        const ack = failed && this.profile.name === 'betaflight'
             ? FOUR_WAY_ACK.ACK_D_GENERAL_ERROR
             : FOUR_WAY_ACK.ACK_OK;
         send([page], ack, this.pageEraseAddress(address));

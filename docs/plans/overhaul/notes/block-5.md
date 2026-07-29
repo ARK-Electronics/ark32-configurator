@@ -12,12 +12,15 @@ Landed on `master` on top of `e217035`:
 | `427b000` | `fix(app): keep a not-connected click out of the unhandled-rejection path` |
 | `457f4c8` | `docs(testing): record what block 5 changed on the wire and what the app layer is not tested by` |
 | `bf42d2f` | `refactor(store): drop the write-only settingsDirty flag (audit item I)` |
+| `1177d96` | `fix(app): serialise UI operations and stop apply-config cloning CAN identity` — the diff review's three findings |
+| `1677dde` | `docs(core): correct three firmware claims in the write and flash comments` |
 | (this file) | the handoff note |
 
 ## Verification
 
 ```
 yarn verify                          → exit 0  (lint 0 errors / 10 warnings, typecheck:core + typecheck:app clean, 296 tests in 16 files)
+                                       three consecutive runs, identical
 done-when (STATUS.json block 5)      → exit 0
   grep -q 'no-restricted-imports' .eslintrc.json && bash scripts/assert-deleted.sh
       30 assertions, all clear
@@ -178,7 +181,23 @@ sections.
     so adding a progress phase in the core is a compile error until the UI names it.**
     That is deliberate — it is the cheapest available substitute for a UI test.
 
-12. **The ESLint rule restricts the `am32-core` barrel too, not just the
+12. **Every UI operation goes through `useEscSession`'s `exclusive()`, and
+    `escStore.isBusy` is its store mirror.** `Am32Session` serialises what reaches
+    the wire; this serialises the *store* work around it — clearing `escData`,
+    marking cards, setting progress fields — which two overlapping operations
+    corrupt even while the wire stays orderly. The buttons are disabled from the
+    flag, so a second click is impossible rather than merely refused. Do not add a
+    UI operation that bypasses it; see the review section for what the absence cost.
+    `disconnect()` is deliberately outside it — it is the escape hatch.
+
+13. **`applySettings` drops `CAN_SETTINGS` from the patch it stages.** Those bytes
+    are per-ESC identity (`can_node`, `esc_index`), the configurator has no editor
+    for them, and copying one ESC's saved config onto four would give an ARK DroneCAN
+    board four ESCs with the same node ID. `writeSettings` leaves an omitted field
+    exactly as the ESC had it, so this is the whole fix. If a config file *should*
+    carry the CAN block, that is a product decision and `applySettings` is the line.
+
+14. **The ESLint rule restricts the `am32-core` barrel too, not just the
     subpaths.** `src/index.ts` re-exports `Link`, `MspParser` and every framing
     helper, so restricting only `am32-core/link` would have been a rule with a hole
     in it. Note the barrel needs `paths: [{ name: 'am32-core' }]` rather than a
@@ -189,7 +208,80 @@ sections.
 
 ## What the diff review changed
 
-<!-- REVIEW SECTION -->
+A subagent reviewed the diff against block 5's done-when in a fresh context. It
+confirmed the requirements, probed the ESLint rule with `eslint --stdin` rather
+than trusting it, checked block 4's design decisions were intact, and read the new
+tests for vacuity ("not vacuous" — the simulator's erase-on-aligned-write and
+`memcmp` model means a misaligned or out-of-order stream genuinely fails). It found
+**three reachable defects**, all now fixed in `1177d96`, plus three firmware-comment
+errors fixed in `1677dde`.
+
+1. **Two Connect clicks orphaned the session, and only a page reload recovered.**
+   `connect()` had no in-flight guard, its catch cleared `live.session`
+   unconditionally, and the Connect button stays enabled for the whole connect
+   (`hasConnection` only flips at `connected`, up to 8 s later). Both handlers get
+   past `getPorts()`; click 2's `disconnect()` sees a null holder because click 1 has
+   not filled it yet; click 1 opens the port; click 2 builds a **second transport on
+   the same `SerialPort`**, `WebSerialTransport.open` skips `port.open()` because
+   `port.readable` is already set, `getReader()` throws on the locked stream, and the
+   catch clears the holder click 1 had just filled. End state: an open port with a
+   live read loop, a working session nobody holds, `hasConnection` true (the
+   never-unsubscribed `state` mirror set it), Read/Save/Flash all toasting "not
+   connected", and **Disconnect skipping `session.disconnect()` because the holder is
+   null — so the port is never closed and every later Connect fails with "already in
+   use"**.
+
+   My own note had claimed this "cannot happen today". That reasoning covered a
+   *disconnect* overlapping a connect, not two *connects* — which is the reachable
+   case. Fixed at three levels: an `exclusive()` guard around every UI operation
+   (mirrored into `escStore.isBusy`, so the buttons are disabled rather than the
+   second click merely refused), an identity check (`if (live.session === session)`)
+   before the failure path clears the holder, and `unmirror()` — the `session.on()`
+   unsubscribe handles are kept and called, so a dead session stops writing to the
+   stores.
+
+2. **The flash modal was no longer locked during the release download.** The app
+   faked the lock by setting `escStore.activeTarget = 0` before the `fetch`; I had
+   removed that (it wedged the modal for good if the download failed) and put nothing
+   in its place, so "Start flash" stayed clickable for the whole download. Two clicks
+   → two `flashTargets`, and the *first* one's `finally` cleared `activeTarget` while
+   the second was still streaming pages, releasing `:prevent-close` mid-write. Fixed
+   by the same `exclusive()` guard plus a local `downloading` ref that disables the
+   button and shows the step, so the modal is never falsely locked and never falsely
+   free.
+
+3. **A Read during a Save truncated the save loop silently.** `readAll` clears
+   `escData` synchronously and the save loop re-read `escStore.escData.length` each
+   iteration, so ESCs #2–#4 were never written, `allWritten` stayed `true`, and the
+   caller reported success. Pre-existing, but this is the block where both flags
+   moved. Fixed by `exclusive()` and by snapshotting the work list before the loop.
+
+Two more the reviewer was right about, also fixed: `serialStore.port` was a new
+**write-only** store field in the block whose job is deleting them, and the
+`composables/**` ESLint override *replaces* `no-restricted-imports` rather than
+merging with it, so composables could still import the `am32-core` barrel and
+`am32-sim`. Both closed; the composables override now names the barrel and the
+simulator too, and I re-probed it.
+
+One finding I fixed beyond its report, because it is the last live edge of audit
+**A**: **`applyConfig` copied `CAN_SETTINGS` between channels.** "Save ESC #1's
+config, apply to all" wrote ESC #1's `can_node` and `esc_index` onto all four, which
+on an ARK DroneCAN board means four ESCs with the same node ID. Pre-existing since
+block 1b made the blob byte-faithful. `applySettings` now drops `CAN_SETTINGS` from
+the staged patch — they are per-ESC identity, the configurator has no editor for
+them, and `writeSettings` leaves an omitted field exactly as the ESC had it.
+`downloadEscConfig` still saves all 192 bytes, so nothing is lost from the file. If
+someone decides a config file *should* carry the CAN block, that is a product
+decision and this is the line to change.
+
+⚠️ **`git checkout --` ate my uncommitted work, exactly as block 4 warned, and I
+walked into it anyway.** I probed the ESLint hole by adding two imports to
+`composables/useEscSession.ts`, confirmed the rule fired, and reverted with
+`git checkout -- composables/useEscSession.ts` — which restored the file from
+`HEAD` and deleted every fix above. I noticed because a grep afterwards came back
+with one hit instead of a dozen, and I had the patches in scrollback to redo. **Commit
+before you probe. If you are about to type `git checkout --`, ask what else is in
+that file.**
 
 ## Mutate before you believe
 
@@ -360,11 +452,23 @@ line number there).
   `audit G:` suite). The `finally` that clears `escStore.activeTarget` lives in
   `useEscSession.flashTargets` rather than in the component so that it is an
   invariant of the operation instead of one call site's manners.
-- **A stale session's events could still write to the stores** if a `disconnect()`
-  overlapped a `connect()`. It cannot today — `connect()` awaits `disconnect()`
-  first, and `disconnect()` drops the reference before it awaits — but nothing
-  structurally prevents it. The fix, if it ever bites, is to hold the unsubscribe
-  functions `session.on()` returns and call them in `disconnect()`.
+- **`am32-sim`'s ArduPilot profile models a `cmd_DeviceWriteEEprom` behaviour
+  ArduPilot does not have for an AM32 ESC.** `writeEepromSilentlySucceeds: true`
+  (`packages/am32-sim/src/profiles.ts:175`) says ArduPilot answers `ACK_OK` having
+  written nothing. Checked with a subagent against
+  `~/code/jake/ardupilot/libraries/AP_BLHeli/AP_BLHeli.cpp`: the
+  `cmd_DeviceWriteEEprom` case switches on the interface mode at `:1209` and has
+  **only** an `imATM_BLB` case (`:1210-1211`) and a `default` that sets
+  `ACK_D_GENERAL_ERROR` (`:1213-1214`). AM32 is `imARM_BLB`, so it hits the default
+  and gets a hard error. The ACK_OK leak is real but Atmel-only. I did **not** change
+  it: it is block 3's code, no host path sends that command (the app's `writeEEprom`
+  went with `four_way.ts` this block, and the session has no equivalent), and
+  flipping the flag would leave it `false` on both profiles — dead config of the kind
+  block 3 deleted other fields for. Whoever next touches the simulator should either
+  delete the flag or keep it with a corrected comment; the citation above is what
+  settles it. The *conclusion* both the flag and the code comments draw — never use
+  `cmd_DeviceWriteEEprom`, write settings with `cmd_DeviceWrite` and verify by
+  read-back — is unaffected and correct.
 - **`Transport` still has no error channel.** Flagged by block 2, inherited by 3, 4
   and now 5. An unplug mid-exchange still waits out the full timeout before the
   *next* attempt rejects with `closed`. Changing the interface touches `am32-web`
@@ -431,11 +535,19 @@ Spelled out because this block moved into its territory and the boundary matters
    in a `.vue` file, you are about to put it somewhere nothing will ever check it
    again.
 
-3. **Mutate the *behaviour*, not the line.** Eight of my nine code mutations went
+3. **Mutate the *behaviour*, not the line — and commit first.** Eight of my nine code mutations went
    red; the one that survived changed only an error message, and chasing it found
    both a parameter that was nearly decorative and a reachable path with no test at
    all. The gate mutations matter just as much: `assert-deleted.sh` greps comments
    too, so naming a deleted symbol in a doc comment fails the gate — and the ESLint
    `patterns.group` matcher has gitignore semantics, so the obvious way to restrict
    the `am32-core` barrel also blocks `am32-core/session`. Both of those would have
-   shipped as "the gate passes" if I had not tried to break them.
+   shipped as "the gate passes" if I had not tried to break them. And the reason
+   block 4's warning about `git checkout --` is in this note twice is that I read it,
+   understood it, and still lost a file's worth of fixes to it — the revert restores
+   from `HEAD`, and a probe is an uncommitted change like any other.
+
+   The mutations also cannot find what you never thought of. Nine of mine went red
+   and the diff review still found three reachable defects, including one that left
+   an open serial port no button could close. Both passes are cheap. Neither is
+   optional.

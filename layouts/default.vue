@@ -13,7 +13,7 @@
               AlkaMotors
             </div>
 
-            <Log v-else class="h-full overflow-auto" />
+            <LogPanel v-else class="h-full overflow-auto" />
           </div>
         </div>
         <div v-if="serialStore.hasSerial" class="">

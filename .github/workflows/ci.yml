@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # The app never talks to a database during lint/typecheck/test, but prisma
+  # generate and nitro's config load want the variable to exist. Same dummy
+  # value ./run.sh uses locally.
+  DATABASE_URL: mysql://am32:am32password@127.0.0.1:3308/am32
+  NUXT_TELEMETRY_DISABLED: '1'
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+
+      - name: Enable Yarn 4
+        run: corepack enable
+
+      - name: Install
+        run: yarn install --immutable
+
+      # Split out from `yarn verify` so a failure names the stage in the job log
+      # instead of collapsing into one red step.
+      - name: Lint
+        run: yarn lint
+
+      - name: Typecheck core (proves the DOM/Node exclusion still holds)
+        run: yarn typecheck:core
+
+      - name: Typecheck app
+        run: yarn typecheck:app
+
+      - name: Test
+        run: yarn test
+
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+
+      - name: Enable Yarn 4
+        run: corepack enable
+
+      - name: Install
+        run: yarn install --immutable
+
+      # Every block lands on master directly, so master must always build.
+      - name: Build
+        run: yarn build

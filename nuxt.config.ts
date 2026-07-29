@@ -1,5 +1,19 @@
+import { fileURLToPath } from 'node:url';
+
 // https://nuxt.com/docs/api/configuration/nuxt-config
 export default defineNuxtConfig({
+    // The protocol core is consumed straight from TypeScript source rather than
+    // a build artifact, so there is no build step to forget and no stale dist to
+    // debug. `transpile` is what makes Vite compile it instead of treating a
+    // workspace symlink as a prebuilt dependency.
+    alias: {
+        'am32-core': fileURLToPath(new URL('./packages/am32-core/src', import.meta.url))
+    },
+
+    build: {
+        transpile: ['am32-core']
+    },
+
     devtools: {
         enabled: true,
 

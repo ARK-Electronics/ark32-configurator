@@ -50,4 +50,3 @@ export default defineEventHandler(async (event) => {
 
     return binariesCache.getItem(`binaries:${filePath}`);
 });
-

@@ -35,13 +35,14 @@
         {
             "id": "1b",
             "title": "Protocol core extraction",
-            "status": "in-progress",
+            "status": "done",
             "dependsOn": [
                 "1a"
             ],
             "doneWhenCmd": "test -f packages/am32-core/src/eeprom/codec.prop.test.ts && test -f packages/am32-core/src/framing/msp.test.ts && test -f packages/am32-core/src/framing/fourway.test.ts && ! grep -q '@am32/serial-msp' package.json",
             "doneWhen": "yarn verify with the eeprom round-trip property test, MSP v1/v2/error/echo golden vectors and 4-way framing vectors all green",
-            "notes": "EEPROM_SIZE 192, CAN_SETTINGS as Uint8Array, encode from the read-back buffer. Reimplement MSP framing from the firmware sources -- do NOT port @am32/serial-msp's compiled dist. Fixes audit A (codec half) and D."
+            "notes": "EEPROM_SIZE 192, CAN_SETTINGS as Uint8Array, encode from the read-back buffer. Reimplement MSP framing from the firmware sources -- do NOT port @am32/serial-msp's compiled dist. Fixes audit A (codec half) and D.",
+            "handoffNote": "docs/plans/overhaul/notes/block-1b.md"
         },
         {
             "id": "2",

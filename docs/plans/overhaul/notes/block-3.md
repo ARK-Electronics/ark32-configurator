@@ -8,7 +8,8 @@ Landed on `master` on top of `b74b33f`:
 | `5454360` | `feat(sim): add am32-sim, a simulated flight controller and its ESCs` |
 | `6f4b84c` | `test(sim): cover the rest of the 4-way command set` |
 | `72bae8d` | `docs(plan): add the block 3 handoff note` |
-| (see below) | `fix(sim): act on the diff review` -- three real bugs, three coverage gaps |
+| `8c2bd58` | `fix(sim): act on the diff review` -- three real bugs, three coverage gaps |
+| (this file's last line) | the hash above |
 
 ⚠️ **`6f4b84c`'s commit message is inaccurate.** It says it "drops an unreachable
 guard in `handleMsp`"; that change actually landed in `5454360`, and `6f4b84c`

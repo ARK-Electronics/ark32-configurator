@@ -24,20 +24,25 @@
 #   ./scripts/overhaul-loop.sh --only 1a    run exactly one block, then stop
 #
 # Env knobs:
-#   OVERHAUL_BRANCH=overhaul/auto   branch to work on (never master)
+#   OVERHAUL_BRANCH=master          branch to commit and push to
 #   OVERHAUL_DEADLINE_MIN=0         wall-clock budget, 0 = unlimited
 #   OVERHAUL_BLOCK_TIMEOUT=5400     per-block timeout in seconds (90 min)
-#   OVERHAUL_MAX_ATTEMPTS=2         attempts per block before giving up
+#   OVERHAUL_MAX_ATTEMPTS=3         attempts per block before giving up
 #   OVERHAUL_MODEL='opus[1m]'
 #   OVERHAUL_EFFORT=xhigh          # see the note in the preflight below
 
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
-BRANCH="${OVERHAUL_BRANCH:-overhaul/auto}"
+# Commits land on master directly -- no PRs, no integration branch. This is safe
+# only because of the ordering in the block loop below: a block's work is
+# verified BEFORE anything is pushed, and a block that fails verification is
+# hard-reset away locally. Nothing unverified ever reaches the remote, so no
+# force-push is ever needed to undo a bad block.
+BRANCH="${OVERHAUL_BRANCH:-master}"
 DEADLINE_MIN="${OVERHAUL_DEADLINE_MIN:-0}"
 BLOCK_TIMEOUT="${OVERHAUL_BLOCK_TIMEOUT:-5400}"
-MAX_ATTEMPTS="${OVERHAUL_MAX_ATTEMPTS:-2}"
+MAX_ATTEMPTS="${OVERHAUL_MAX_ATTEMPTS:-3}"
 MODEL="${OVERHAUL_MODEL:-opus[1m]}"
 # xhigh, not max. Anthropic's own guidance is that xhigh is the best setting for
 # coding and agentic work, and that max shows diminishing returns and is prone to
@@ -89,13 +94,16 @@ if [ -n "$(git status --porcelain)" ]; then
 fi
 
 if [ "$DRY_RUN" -eq 0 ]; then
-    if ! git show-ref --verify --quiet "refs/heads/$BRANCH"; then
-        say "creating $BRANCH from $(git rev-parse --abbrev-ref HEAD)"
-        git checkout -b "$BRANCH" >/dev/null 2>&1 || die "could not create $BRANCH"
-    else
-        git checkout "$BRANCH" >/dev/null 2>&1 || die "could not switch to $BRANCH"
-    fi
+    git show-ref --verify --quiet "refs/heads/$BRANCH" || die "branch $BRANCH does not exist"
+    git checkout "$BRANCH" >/dev/null 2>&1 || die "could not switch to $BRANCH"
     [ "$(git rev-parse --abbrev-ref HEAD)" = "$BRANCH" ] || die "not on $BRANCH"
+
+    # Start in sync with the remote, so the first push of the night is a
+    # fast-forward rather than a surprise.
+    git fetch ark "$BRANCH" >/dev/null 2>&1 || warn "could not fetch ark/$BRANCH"
+    if ! git merge-base --is-ancestor "ark/$BRANCH" HEAD 2>/dev/null; then
+        die "$BRANCH is behind or has diverged from ark/$BRANCH. Reconcile before starting an unattended run."
+    fi
 
     say "baseline check: yarn verify must be green before we start"
     if ! yarn verify >"$LOGDIR/baseline-verify.log" 2>&1; then

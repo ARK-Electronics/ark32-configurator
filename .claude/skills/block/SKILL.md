@@ -79,16 +79,22 @@ findings into over-engineering.
 
 ## 7. Land
 
+Blocks land on `master` directly — no PRs. Commit locally with real messages and
+push to `ark`, never `origin` (that is upstream `am32-firmware`):
+
 ```bash
-# master must stay working: every block lands independently.
-gh pr create --repo ARK-Electronics/ark32-configurator --base master
+git push ark master
 ```
 
-Push to `ark`, never `origin` (that is upstream `am32-firmware`).
+`master` must be working when you leave it: `yarn verify` green and the app still
+connects.
 
 Then update `docs/plans/overhaul/STATUS.json`: set this block's `status`, fill
 in `landedIn`, and record anything the next block's agent would otherwise have
 to rediscover.
+
+> Running under `scripts/overhaul-loop.sh`? The driver owns git and `STATUS.json`
+> — commit your work, but do not push and do not edit `STATUS.json` yourself.
 
 ## 8. Stop
 

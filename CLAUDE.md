@@ -40,8 +40,9 @@ Nuxt consumes `am32-core` straight from TypeScript source via an `alias` +
   **`origin` is upstream** (`am32-firmware/am32-configurator`). Push and open
   PRs against `ark` only — `gh` has no default repo set, so always pass
   `--repo ARK-Electronics/ark32-configurator`.
-- One PR per overhaul block, straight to `master`. Every block must leave
-  `master` in a working state: `yarn verify` green and the app still connects.
+- Overhaul blocks commit and push straight to `master` — no PRs. Every block must
+  leave `master` in a working state: `yarn verify` green and the app still
+  connects. Nothing gets pushed until `yarn verify` passes.
 
 ## Gotchas
 

@@ -165,6 +165,22 @@ else
     printf '%s\n' "$JSON" | head -5 | sed 's/^/          /'
 fi
 
+# ---- a pipeline that truncates output is not a failure ----------------------
+
+echo "Piping"
+"${RUN_ARK[@]}" --sim --escs 2 get --esc all > /dev/null 2>&1
+FULL=$?
+"${RUN_ARK[@]}" --sim --escs 2 get --esc all 2>/dev/null | head -2 > /dev/null
+PIPED=${PIPESTATUS[0]}
+if [ "$FULL" -eq 0 ] && [ "$PIPED" -eq 0 ]; then
+    # Node turns a closed pipe into an EPIPE *write error*, not a signal, so
+    # `ark32 get | head` used to propagate out and exit 1 -- a partial failure
+    # reported to a script under `set -o pipefail` for a pipeline that worked.
+    pass 'ark32 ... | head exits 0'
+else
+    fail "expected 0 unpiped and 0 piped, got $FULL and $PIPED"
+fi
+
 # ---- --sim must never load the native module -------------------------------
 
 echo

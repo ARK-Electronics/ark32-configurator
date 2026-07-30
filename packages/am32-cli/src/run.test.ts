@@ -455,8 +455,11 @@ describe('ark32 write', () => {
     // same ESC.
 
     it('exits 3 rather than opening a port when the file is unusable', async () => {
-        expect((await cli(['--sim', 'write', '--esc', 'all', '-i', 'missing.bin'])).code)
-            .toBe(EXIT_USAGE);
+        const missing = await cli(['--sim', '-v', 'write', '--esc', 'all', '-i', 'missing.bin']);
+        expect(missing.code).toBe(EXIT_USAGE);
+        // Same reasoning as the malformed-hex case: exit 3 has to mean nothing was
+        // attempted, so the state channel must never reach `connecting`.
+        expect(missing.stderr).not.toContain('-> connecting');
 
         const empty = await cli(['--sim', 'write', '--esc', 'all', '-i', 'empty.bin'], {
             files: { 'empty.bin': new Uint8Array(0) }
@@ -533,11 +536,17 @@ describe('ark32 flash', () => {
 
     it('exits 3 on a malformed hex without opening anything', async () => {
         const result = await cli(
-            ['--sim', 'flash', '--esc', '1', '--hex', 'notahex.txt'],
+            ['--sim', '-v', 'flash', '--esc', '1', '--hex', 'notahex.txt'],
             { files: { 'notahex.txt': 'this is not an Intel HEX file\n' } }
         );
         expect(result.code).toBe(EXIT_USAGE);
         expect(result.stderr).toContain('not a valid Intel HEX file');
+        // The exit code alone cannot tell this test anything: `flash()` throws
+        // `SessionError('image')` with the same message, which also maps to 3. What
+        // makes exit 3 mean "nothing was attempted" is that the hex is parsed
+        // *before* the port is opened -- so assert on the state channel, which never
+        // reaches `connecting` here.
+        expect(result.stderr).not.toContain('-> connecting');
     });
 
     it('survives an ESC that answers 600 ms late', async () => {

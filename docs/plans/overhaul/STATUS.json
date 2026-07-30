@@ -84,13 +84,14 @@
         {
             "id": "5",
             "title": "UI as a thin client",
-            "status": "in-progress",
+            "status": "done",
             "dependsOn": [
                 "4"
             ],
             "doneWhenCmd": "grep -q 'no-restricted-imports' .eslintrc.json && bash scripts/assert-deleted.sh",
             "doneWhen": "yarn verify with the no-restricted-imports rule active, plus assert-deleted",
-            "notes": "SerialDevice.vue shrinks to UI + store mirroring. Deletes src/communication/*, commands.queue.ts, the queue dependency, dead store fields (I). Flash failures surface as a toast and release the modal."
+            "notes": "SerialDevice.vue shrinks to UI + store mirroring. Deletes src/communication/*, commands.queue.ts, the queue dependency, dead store fields (I). Flash failures surface as a toast and release the modal.",
+            "handoffNote": "docs/plans/overhaul/notes/block-5.md"
         },
         {
             "id": "6",

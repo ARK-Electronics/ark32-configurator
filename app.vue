@@ -54,4 +54,3 @@ if (import.meta.client && typeof navigator !== 'undefined' && 'serial' in naviga
     logError('WebSerial not supported, use Chrome/Edge for ESC configuration.');
 }
 </script>
-

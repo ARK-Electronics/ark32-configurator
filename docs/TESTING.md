@@ -105,8 +105,14 @@ ark32 --sim --fault esc3=unresponsive --json enumerate   # reproduce a reported 
 ark32 --sim --fc betaflight --escs 2 -v info    # watch the session's own log lines
 ```
 
-`--fault` reaches every knob in the table above; `ark32 --help` lists the specs.
-`escN` is 1-based, exactly as `--esc` is.
+`--fault` reaches eleven of the twelve knobs in the table above; `ark32 --help`
+lists the specs. `escN` is 1-based, exactly as `--esc` is. The twelfth,
+`esc[n].canBlock`, is deliberately not a flag: it sets an ESC's CAN identity rather
+than injecting a fault, and `ark32 set --esc N CAN_SETTINGS=...` is the CLI's way to
+change those bytes. Each of the eleven has a test in
+`packages/am32-cli/src/run.test.ts` that asserts an observable consequence, not just
+that the spec parsed -- eight of them were reaching `applyFault` and nothing beyond
+it until a fresh-context review of block 7 pointed it out.
 
 **`--sim` runs on a virtual clock, not the system one.** A simulated run would
 otherwise take real time for every delay the protocol contains — ArduPilot's 4 s

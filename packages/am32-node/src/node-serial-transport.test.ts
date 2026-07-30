@@ -331,6 +331,41 @@ describe('NodeSerialTransport: the port going away', () => {
 
         await expect(r.transport.write(Uint8Array.from([1]))).rejects.toThrow('is not open');
     });
+
+    it('stops delivering bytes once the port has died', async () => {
+        const r = rig();
+        await r.transport.open({ baudRate: 115200 });
+
+        const seen: number[][] = [];
+        r.transport.onData(chunk => seen.push([...chunk]));
+
+        r.port().emitData([1]);
+        r.port().emitError('gone');
+        // `fail()` cannot detach the handler -- it may be running inside it -- so
+        // without a guard the link would keep receiving frames while `isOpen` is
+        // false, and could accept one as the answer to an exchange whose caller has
+        // already been told it failed.
+        r.port().emitData([2]);
+
+        expect(seen).toEqual([[1]]);
+        expect(r.transport.isOpen).toBe(false);
+    });
+
+    it('lets go of a dead port before opening a new one', async () => {
+        const r = rig();
+        await r.transport.open({ baudRate: 115200 });
+        const dead = r.port();
+        dead.emitError('gone');
+
+        await r.transport.open({ baudRate: 115200 });
+
+        // Otherwise the dead port is leaked with its listeners still attached, and
+        // on a real device its file descriptor with it.
+        expect(r.port()).not.toBe(dead);
+        expect(dead.calls).toContain('close');
+        expect(dead.listenerCount).toBe(0);
+        expect(r.transport.isOpen).toBe(true);
+    });
 });
 
 describe('NodeSerialTransport: against serialport\'s own SerialPortMock', () => {

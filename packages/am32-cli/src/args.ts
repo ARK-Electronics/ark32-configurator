@@ -157,9 +157,13 @@ const NEEDS_ESC = new Set<CommandName>(['read', 'write', 'get', 'set', 'defaults
  *  - `none` -- a plain boolean knob; a value is a mistake.
  *  - `number` -- required, and measured in whatever the knob measures (ms for
  *    `slowBy`, bytes for `dropBytes`, an MSP command id for `mspError`).
- *  - `count` -- `boolean | number` in `SimEsc`: absent means "every time", a
- *    number means "the next N". The counted form is what makes "the retry
- *    recovered" an exact assertion instead of a race, which is why it exists.
+ *  - `count` -- `boolean | number` in `SimEsc`: absent means the knob's plain
+ *    "always" form, a number means whatever that knob counts. For `corruptCrc`,
+ *    `silentWriteFailure` and `failingFlashCell` that is "the next N", which is what
+ *    makes "the retry recovered" an exact assertion instead of a race. **For
+ *    `shortRead` it is a byte count**, not an occurrence count -- `true` is one byte
+ *    short and `:2` is "always answer with two" -- which is why `USAGE` spells that
+ *    one `[:BYTES]`.
  *  - `flag` -- `true` when bare, or an explicit `true`/`false`.
  *
  * Validating values *here* rather than where they are applied is deliberate:

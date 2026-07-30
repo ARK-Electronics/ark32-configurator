@@ -66,7 +66,17 @@ const CONNECT_REASONS: ReadonlySet<SessionErrorReason> = new Set<SessionErrorRea
     'not-connected'
 ]);
 
-/** The exit code for a failure that stopped the whole command. */
+/**
+ * The exit code for a failure that stopped the whole command.
+ *
+ * A total mapping over `SessionErrorReason` rather than a guard, which is why the
+ * `image` row is here even though nothing currently reaches it through `run()`:
+ * every `SessionError('image')` is raised inside `forEachTarget` and becomes a
+ * per-target outcome, so it goes through {@link exitCodeForTargets} instead, and a
+ * file this CLI can reject on its own is a `UsageError` before the wire. Keeping the
+ * row means the *mapping* is complete for a caller that raises one outside a target
+ * walk -- an `--esc`-less flash, say -- rather than silently giving it a 1.
+ */
 export function exitCodeForError (error: unknown): ExitCode {
     const session = causedBySessionError(error);
     if (!session) {
@@ -98,10 +108,10 @@ export interface TargetOutcome {
  * one channel accepted is a partial result.
  */
 export function exitCodeForTargets (outcomes: readonly TargetOutcome[]): ExitCode {
-    if (outcomes.length === 0) {
-        return EXIT_OK;
-    }
-
+    // No early return for an empty array: `failures.length === 0` already covers it,
+    // and a separate branch made the test that asserts `exitCodeForTargets([]) === 0`
+    // pass for the wrong reason. (An empty target list cannot reach here anyway --
+    // `run.ts` rejects a zero-channel FC before any command walks one.)
     const failures = outcomes.filter(outcome => !outcome.ok);
     if (failures.length === 0) {
         return EXIT_OK;

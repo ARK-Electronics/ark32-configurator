@@ -307,10 +307,19 @@ export async function commandWrite (
     reporter: Reporter
 ): Promise<CommandOutcome> {
     const outcomes = await forEachTarget(selector, escCount, async (target) => {
-        // The ESC's own layout revision decides how the file decodes. Taking it
-        // from the ESC rather than from a flag or a constant is block 6's finding:
-        // the app clamped anything above 3 to 2 while the server clamped it to 3,
-        // and both were guesses about a number the ESC is holding.
+        // The ESC's own layout revision decides how the file decodes. Taking it from
+        // the ESC rather than from a flag or a constant is block 6's finding: the app
+        // clamped anything above 3 to 2 while the server clamped it to 3, and both
+        // were guesses about a number the ESC is holding.
+        //
+        // The failure is asymmetric, and worth knowing before "simplifying" this to a
+        // constant. Too *high* a revision is harmless: `writeSettings` calls
+        // `encodeSettings` with the revision read off the ESC's own image, so a field
+        // the ESC does not have is dropped there whatever this patch contains. Too
+        // *low* silently omits fields the ESC does have -- decoding a revision-3
+        // ESC's file at revision 2 loses the eight tunables at 0x05-0x0C, with
+        // `changed: true` and no warning. Both directions are pinned in
+        // `settings.test.ts`.
         const info: McuInfo = await session.readEsc(target);
         const layoutRevision = (info.settings.LAYOUT_REVISION as number | undefined) ?? 0;
         return session.writeSettings(target, imagePatch(image, layoutRevision), { verify });

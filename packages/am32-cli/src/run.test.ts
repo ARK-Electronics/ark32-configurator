@@ -638,3 +638,153 @@ describe('issue #3 block 7 done-when', () => {
         }
     });
 });
+
+// ---- every fault knob, fired through the CLI --------------------------------
+
+/**
+ * `--fault` is what section 3 sells `--sim` on: "a hardware-free way to ... reproduce
+ * a reported failure". `args.test.ts` proves the specs *parse*; these prove the CLI
+ * arms the knob on the right object. TypeScript covers the value shapes and cannot
+ * cover aiming a knob at the wrong ESC, or at the FC instead of the link -- eight of
+ * the eleven were reaching `applyFault` and nothing beyond it.
+ *
+ * Each case asserts an observable consequence rather than "it did not crash", which
+ * is the only thing that distinguishes an armed knob from an ignored one.
+ */
+describe('ark32 --fault: every knob reaches the simulator', () => {
+    it('esc[n].unresponsive takes that channel down and no other', async () => {
+        const result = await cli(['--sim', '--escs', '3', '--fault', 'esc2=unresponsive', '--json', 'enumerate']);
+        expect(result.code).toBe(EXIT_PARTIAL);
+        expect(escsOf(result).map(esc => esc.ok)).toEqual([true, false, true]);
+    });
+
+    it('esc[n].slowBy is charged to that channel and the whole path absorbs 600 ms', async () => {
+        // Block 6 raised HOST_MARGIN_MS to 700 for exactly this tolerance, so a
+        // success here is the CLI inheriting that derivation rather than a literal.
+        const ok = await cli(['--sim', '--escs', '1', '--fault', 'esc1=slowBy:600', 'enumerate']);
+        expect(ok.code).toBe(EXIT_OK);
+
+        // ...and far beyond it, the host timeout is what gives up.
+        const tooSlow = await cli(['--sim', '--escs', '1', '--fault', 'esc1=slowBy:60000', '--json', 'enumerate']);
+        expect(tooSlow.code).toBe(EXIT_PARTIAL);
+        expect(escsOf(tooSlow)[0]?.ok).toBe(false);
+    });
+
+    it('esc[n].corruptCrc is recovered by the link\'s retry when it is counted', async () => {
+        // A counted knob is what makes "the retry recovered" an exact assertion
+        // rather than a race: two bad replies, ten attempts, so it must succeed.
+        const recovered = await cli(['--sim', '--escs', '1', '--fault', 'esc1=corruptCrc:2', 'enumerate']);
+        expect(recovered.code).toBe(EXIT_OK);
+
+        // Uncounted, every reply is corrupt and no number of retries helps.
+        const never = await cli(['--sim', '--escs', '1', '--fault', 'esc1=corruptCrc', 'enumerate']);
+        expect(never.code).toBe(EXIT_PARTIAL);
+    });
+
+    it('esc[n].shortRead never comes back as data', async () => {
+        // Two things this pins that are easy to get backwards.
+        //
+        // `shortRead`'s number is **bytes returned**, not a count of occurrences:
+        // `true` is one byte short, `:2` is "always answer with two". So neither
+        // form is recoverable and both must fail.
+        //
+        // And the reason is `esc-command`, not `esc-read`. A short read is a read
+        // *timeout* on the FC side, which both firmwares report to the host as a
+        // one-param `ACK_D_GENERAL_ERROR` (block 3's note) -- so the session's ACK
+        // check is what rejects it. `esc-read` is for the other shape: ArduPilot
+        // answering a failed `CMD_SET_ADDRESS` with `ACK_OK` and one byte of
+        // uninitialised stack, where only the length check can tell.
+        //
+        // Asserted through `get` rather than `enumerate`, because `enumerate`'s
+        // per-channel entries come from `EscResult`, which carries a message and no
+        // reason -- see `commands/info.ts`.
+        for (const spec of ['esc1=shortRead', 'esc1=shortRead:2']) {
+            const result = await cli(['--sim', '--escs', '1', '--fault', spec, '--json', 'get', '--esc', '1']);
+            expect(result.code, spec).toBe(EXIT_PARTIAL);
+            expect(escsOf(result)[0]?.reason, spec).toBe('esc-command');
+            expect(escsOf(result)[0]?.settings, spec).toBeNull();
+        }
+    });
+
+    it('esc[n].silentWriteFailure is caught by the read-back and repaired', async () => {
+        // The one host-visible shape the bootloader's own memcmp cannot produce:
+        // ArduPilot leaks ACK_OK when its final BL_GetACK times out. Nothing but
+        // read-back verification finds it, so a `set` must still end up verified.
+        const recovered = await cli([
+            '--sim', '--escs', '1', '--fault', 'esc1=silentWriteFailure:1', '--json',
+            'set', '--esc', '1', 'TIMING_ADVANCE=16'
+        ]);
+        expect(recovered.code).toBe(EXIT_OK);
+        expect(escsOf(recovered)[0]?.verified).toBe(true);
+
+        // Forever, and the four page attempts run out.
+        const never = await cli([
+            '--sim', '--escs', '1', '--fault', 'esc1=silentWriteFailure', '--json',
+            'set', '--esc', '1', 'TIMING_ADVANCE=16'
+        ]);
+        expect(never.code).toBe(EXIT_PARTIAL);
+        expect(escsOf(never)[0]?.reason).toBe('esc-verify');
+    });
+
+    it('esc[n].failingFlashCell is repaired at the page base', async () => {
+        // The complement: the page is partly programmed with bits that cannot be set
+        // back, so only a write to the page base -- which erases first -- recovers.
+        const recovered = await cli([
+            '--sim', '--escs', '1', '--fault', 'esc1=failingFlashCell:1',
+            'flash', '--esc', '1', '--hex', 'fw.hex'
+        ], { files: { 'fw.hex': firmwareHex() } });
+        expect(recovered.code).toBe(EXIT_OK);
+
+        const never = await cli([
+            '--sim', '--escs', '1', '--fault', 'esc1=failingFlashCell',
+            'flash', '--esc', '1', '--hex', 'fw.hex'
+        ], { files: { 'fw.hex': firmwareHex() } });
+        expect(never.code).toBe(EXIT_PARTIAL);
+    });
+
+    it('fc.mavlinkIdleGate opens and shuts the ArduPilot window', async () => {
+        const open = await cli(['--sim', '--escs', '1', '--fault', 'fc=mavlinkIdleGate:0', '-v', 'info']);
+        expect(open.code).toBe(EXIT_OK);
+        // Gate open means the first probe is answered, so no window was waited out.
+        expect(open.stdout).not.toContain('after the MAVLink idle window');
+
+        const shut = await cli(['--sim', '--escs', '1', '--fault', 'fc=mavlinkIdleGate:100000', 'info']);
+        expect(shut.code).toBe(EXIT_CONNECT);
+    });
+
+    it('fc.blockingFourWay is what tells the two FC profiles apart', async () => {
+        // Off, an ArduPilot-profile rig lets a `$` escape 4-way -- and ArduPilot's
+        // real behaviour is to tear the ESCs down when it does, which is why the
+        // session refuses MSP in passthrough at all. On, the frame is swallowed.
+        // Either way a connect and an enumerate must work, so the assertion is that
+        // the knob changes nothing the CLI can get wrong.
+        const blocking = await cli(['--sim', '--escs', '2', '--fault', 'fc=blockingFourWay', '--json', 'enumerate']);
+        expect(blocking.code).toBe(EXIT_OK);
+        expect(escsOf(blocking)).toHaveLength(2);
+
+        const multiplexed = await cli([
+            '--sim', '--fc', 'betaflight', '--escs', '2', '--fault', 'fc=blockingFourWay:false',
+            '--json', 'enumerate'
+        ]);
+        expect(multiplexed.code).toBe(EXIT_OK);
+        expect(escsOf(multiplexed)).toHaveLength(2);
+    });
+
+    it('fc.mspError makes one MSP command fail', async () => {
+        // MSP_API_VERSION is 1: the first thing `connect()` asks for, so erroring it
+        // is a flight controller that answers and cannot be identified. Audit D --
+        // the reply must be rejected rather than parsed as data.
+        const result = await cli(['--sim', '--fc', 'betaflight', '--fault', 'fc=mspError:1', 'info']);
+        expect(result.code).toBe(EXIT_CONNECT);
+    });
+
+    it('link.dropBytes and link.injectGarbage are recovered by drain and retry', async () => {
+        // Both are armed once, so the retry must recover: audit E and G. A framing
+        // failure that survived would poison the next ESC instead.
+        const dropped = await cli(['--sim', '--escs', '2', '--fault', 'link=dropBytes:1', 'enumerate']);
+        expect(dropped.code).toBe(EXIT_OK);
+
+        const garbage = await cli(['--sim', '--escs', '2', '--fault', 'link=injectGarbage:8', 'enumerate']);
+        expect(garbage.code).toBe(EXIT_OK);
+    });
+});

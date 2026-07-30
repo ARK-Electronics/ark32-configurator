@@ -79,6 +79,14 @@ export class NodeSerialTransport implements Transport {
             return;
         }
 
+        // A port that failed is still held: `fail()` clears `running` but cannot
+        // close anything, because it may be called from inside the port's own error
+        // handler. Reopening without letting go of it would leak the dead one and
+        // leave its listeners attached.
+        if (this.port) {
+            await this.close();
+        }
+
         // autoOpen: false so the failure arrives as a rejected promise rather
         // than an 'error' event on an object the caller does not hold yet.
         const port = this.createPort({ path: this.path, baudRate: opts.baudRate, autoOpen: false });
@@ -172,7 +180,12 @@ export class NodeSerialTransport implements Transport {
     }
 
     private emit (chunk: Uint8Array): void {
-        if (chunk.length === 0) {
+        // A failed port keeps its `data` handler attached until `close()` runs, so
+        // without this the link would keep receiving frames while `isOpen` is
+        // false -- and could accept one as the answer to an exchange the caller has
+        // already been told failed. `WebSerialTransport` gets this for free by
+        // stopping its read loop; here it has to be said.
+        if (!this.running || chunk.length === 0) {
             return;
         }
         for (const listener of [...this.listeners]) {

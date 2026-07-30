@@ -8,10 +8,10 @@
 # binary** has it. Between `run()` and `ark32` sit the esbuild bundle, the shebang,
 # the `bin` link and the argv/exit-code plumbing in `main.ts` -- and a bundling
 # mistake (a dynamic import that did not survive, a workspace package that was not
-# inlined) breaks the binary while leaving 451 green tests behind it.
+# inlined) breaks the binary while leaving a green test suite behind it.
 #
 # It runs the plan's two done-when command lines verbatim, from a directory
-# containing `fixture.bin`, which is why the fixture is copied rather than passed
+# containing `fixture.bin`, which is why the fixtures are copied rather than passed
 # by path.
 
 set -uo pipefail
@@ -20,6 +20,7 @@ cd "$(dirname "$0")/.."
 REPO="$PWD"
 ARK="$REPO/node_modules/.bin/ark32"
 FIXTURE="$REPO/packages/am32-cli/fixtures/fixture.bin"
+HEX="$REPO/packages/am32-cli/fixtures/firmware.hex"
 
 FAIL=0
 fail() { printf '  FAIL  %s\n' "$1"; FAIL=1; }
@@ -68,6 +69,7 @@ fi
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
 cp "$FIXTURE" "$WORK/fixture.bin"
+cp "$HEX" "$WORK/firmware.hex"
 cd "$WORK"
 
 # check <expected-exit> <description> -- <command...>
@@ -111,6 +113,13 @@ check 0 'write'     -- "${RUN_ARK[@]}" --sim --escs 2 write --esc all -i fixture
 check 0 'get'       -- "${RUN_ARK[@]}" --sim --escs 2 get --esc 1
 check 0 'set'       -- "${RUN_ARK[@]}" --sim --escs 2 set --esc all TIMING_ADVANCE=16
 check 0 'defaults'  -- "${RUN_ARK[@]}" --sim --escs 2 defaults --esc all
+# `flash` is the command whose pre-flight is most exposed to a bundling mistake --
+# `parseHex` runs inside the bundle before anything is opened -- which is the whole
+# reason this gate exists, so it needs a real .hex rather than only in-process
+# coverage. `fixtures/firmware.hex` carries the simulated ESC's own firmware name at
+# `eeprom_offset - 32`, so the MCU-layout check passes rather than being skipped.
+check 0 'flash'     -- "${RUN_ARK[@]}" --sim --escs 2 flash --esc all --hex firmware.hex
+check 3 'flash with a hex for another board' -- "${RUN_ARK[@]}" --sim --escs 1 flash --esc 1 --hex fixture.bin
 check 0 'reset'     -- "${RUN_ARK[@]}" --sim --escs 2 reset --esc all
 
 echo

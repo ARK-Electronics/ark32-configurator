@@ -81,7 +81,17 @@ export function commandEnumerate (
             : null,
         bootloaderVersion: result.ok ? result.info?.bootloader.version ?? null : null,
         layoutRevision: result.ok ? result.info?.settings.LAYOUT_REVISION ?? null : null,
-        ...(result.ok ? {} : { error: result.error ?? null })
+        error: result.ok ? null : result.error ?? null,
+        /**
+         * Always null, unlike every other per-channel command's `escs[]`.
+         * `Am32Session.enumerate` returns `EscResult`, which carries a message and
+         * no reason -- it is the one per-channel API that swallows failures itself
+         * rather than throwing, so there is no `SessionError` left to read one off.
+         * Reported as null rather than omitted so the array's keys do not depend on
+         * the outcome; if a script needs the reason here, adding it to `EscResult`
+         * in `am32-core` is the fix.
+         */
+        reason: null
     }));
 
     const lines = escs.map(esc => (esc.ok

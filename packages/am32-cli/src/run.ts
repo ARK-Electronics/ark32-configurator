@@ -345,9 +345,15 @@ async function withRig (
     } finally {
         // Never let a teardown failure replace the command's own result: the
         // command is what the caller asked about.
-        await drive(() => session.disconnect().catch((error: unknown) => {
+        //
+        // The `catch` has to be around the whole `drive(...)`, not just around
+        // `disconnect()`. Under `--sim`, `drive` is the virtual-clock pump, and it
+        // can throw on its own account -- a deadlock or a timer storm -- so a
+        // `catch` attached one level in would let that escape the `finally` and
+        // overwrite the exit code the command had already earned.
+        await drive(() => session.disconnect()).catch((error: unknown) => {
             reporter.warn(`disconnect: ${describeError(error)}`);
-        }));
+        });
     }
 }
 

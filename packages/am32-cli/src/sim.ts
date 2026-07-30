@@ -146,6 +146,15 @@ function applyFault (harness: SimHarness, fault: FaultSpec): void {
 const MAX_IDLE_ROUNDS = 1000;
 
 /**
+ * Timers the pump will fire before deciding a callback is rescheduling forever.
+ *
+ * The same number `VirtualClock.runAll` uses (`am32-core/clock.ts`), and for the
+ * same reason. A bound on *idle* rounds cannot catch a timer storm, because every
+ * round of one is productive.
+ */
+const MAX_TIMER_FIRINGS = 100_000;
+
+/**
  * Advance `clock` until `work` settles.
  *
  * The counterpart of the `drive()` helper in the simulator's own integration
@@ -171,6 +180,7 @@ export async function driveVirtualClock<T> (clock: VirtualClock, work: Promise<T
     tracked.catch(() => {});
 
     let idle = 0;
+    let fired = 0;
     while (!status.settled) {
         const progressed = await clock.advanceToNextTimer();
         if (status.settled) {
@@ -178,6 +188,20 @@ export async function driveVirtualClock<T> (clock: VirtualClock, work: Promise<T
         }
         if (progressed) {
             idle = 0;
+            // The *other* way this loop never ends, and the one a bound on idle
+            // rounds cannot see: a callback that keeps rescheduling a timer makes
+            // every round productive, so `idle` resets forever and the CLI burns
+            // CPU with no output and no diagnostic. `VirtualClock.runAll` guards
+            // exactly this with the same constant; this pump is the one clock
+            // driver in the repo a user is actually waiting on, so it needs the
+            // guard more, not less.
+            fired += 1;
+            if (fired > MAX_TIMER_FIRINGS) {
+                throw new Error(
+                    `the simulator fired ${MAX_TIMER_FIRINGS} timers without the operation ` +
+                    'settling: a callback keeps rescheduling. This is a timer storm, not a slow run.'
+                );
+            }
             continue;
         }
         // Nothing is waiting on time, so whatever is pending is waiting on the

@@ -15,7 +15,8 @@ import { describe, expect, it } from 'vitest';
 import { EEPROM_SIZE, EepromLayout } from 'am32-core/eeprom/layout';
 import { DEFAULTS_PRESERVED_FIELDS } from 'am32-core/eeprom/defaults';
 import { Am32Session } from 'am32-core/session';
-import type { SimEsc } from 'am32-sim/esc';
+import { SimEsc } from 'am32-sim/esc';
+import { createSimHarness } from 'am32-sim/harness';
 import { parseArgs, type GlobalOptions } from '../args';
 import { Reporter } from '../report';
 import { createSimRig, driveVirtualClock } from '../sim';
@@ -240,5 +241,78 @@ describe('commandDefaults: what reaches the ESC', () => {
         // `apply defaults` has always cleared the melody: tune[0] == 0xFF is the
         // "no melody" marker.
         expect(after[0x30]).toBe(0xFF);
+    });
+});
+
+describe('commandWrite: whose layout revision decodes the file', () => {
+    it('uses the ESC\'s own revision, so no field the ESC has is silently dropped', async () => {
+        // Block 6's bug in the shape a CLI can reproduce -- but only in one
+        // direction, and getting that right took a mutation to find out.
+        //
+        // The revision here decides which fields `decodeSettings` pulls **out of the
+        // file**. It cannot cause a wrong field to be written: `writeSettings` calls
+        // `encodeSettings` with the revision read off the ESC's own image, so a
+        // field the ESC does not have is dropped there whatever the patch contains.
+        // Passing *too high* a revision is therefore harmless -- hard-coding 3 leaves
+        // this suite green, which is correct rather than a hole.
+        //
+        // Passing too *low* a revision is the real failure: the eight fields at
+        // 0x05-0x0C are revision-3 only, so decoding a revision-3 ESC's file at
+        // revision 2 silently omits all eight and the user's configuration is applied
+        // minus a third of its tunables, with `changed: true` and no warning.
+        const esc = new SimEsc({ layoutRevision: 3 });
+        const globals = globalsFor(['--sim', '--escs', '1', 'write', '--esc', '1', '-i', 'fixture.bin']);
+        const sim = createSimHarness({ profile: 'ardupilot', escs: [esc] });
+        await sim.transport.open({ baudRate: 115200 });
+        const session = new Am32Session({ transport: sim.transport, clock: sim.clock });
+        const drive = <T>(work: () => Promise<T>): Promise<T> => driveVirtualClock(sim.clock, work());
+        await drive(() => session.connect());
+        const escCount = await drive(() => session.enterPassthrough());
+        const { reporter } = silentReporter(globals);
+
+        const outcome = await drive(() => commandWrite(session, [0], escCount, FIXTURE, true, reporter));
+        expect(outcome.exitCode).toBe(0);
+
+        const after = esc.eeprom;
+        expect(after[EepromLayout.TIMING_ADVANCE.offset]).toBe(26);
+
+        // Every revision-3-only field the fixture carries must have landed. The
+        // fixture's values at 0x05-0x0C come from AM32's own default_settings[], and
+        // none of them is what a fresh SimEsc holds there (0x00), so each assertion
+        // distinguishes "written" from "already that value".
+        for (const field of [
+            'MAX_RAMP', 'MINIMUM_DUTY_CYCLE', 'ABSOLUTE_VOLTAGE_CUTOFF', 'CURRENT_P'
+        ] as const) {
+            const at = EepromLayout[field].offset;
+            expect(after[at], field).toBe(FIXTURE[at]);
+            expect(after[at], `${field} is indistinguishable from the ESC's own value`).not.toBe(0x00);
+        }
+    });
+
+    it('and a revision-2 ESC is not given fields it does not have', async () => {
+        // The other direction, which the *core* enforces rather than this file:
+        // `encodeSettings` skips a field the ESC's revision excludes. Asserted here
+        // anyway, because it is the property a caller depends on and it is one layer
+        // away from the code that provides it.
+        const esc = new SimEsc({ layoutRevision: 2 });
+        const before = esc.eeprom;
+        const globals = globalsFor(['--sim', '--escs', '1', 'write', '--esc', '1', '-i', 'fixture.bin']);
+        const sim = createSimHarness({ profile: 'ardupilot', escs: [esc] });
+        await sim.transport.open({ baudRate: 115200 });
+        const session = new Am32Session({ transport: sim.transport, clock: sim.clock });
+        const drive = <T>(work: () => Promise<T>): Promise<T> => driveVirtualClock(sim.clock, work());
+        await drive(() => session.connect());
+        const escCount = await drive(() => session.enterPassthrough());
+        const { reporter } = silentReporter(globals);
+
+        await drive(() => commandWrite(session, [0], escCount, FIXTURE, true, reporter));
+
+        const after = esc.eeprom;
+        expect(after[EepromLayout.TIMING_ADVANCE.offset]).toBe(26);
+        for (const field of ['MAX_RAMP', 'CURRENT_P', 'ACTIVE_BRAKE_POWER'] as const) {
+            const at = EepromLayout[field].offset;
+            expect(after[at], field).toBe(before[at]);
+        }
+        expect(after[EepromLayout.LAYOUT_REVISION.offset]).toBe(2);
     });
 });

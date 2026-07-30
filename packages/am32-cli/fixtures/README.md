@@ -31,3 +31,25 @@ Five of those rows are the six fields `ark32 write` drops
 (`DEFAULTS_PRESERVED_FIELDS` in `am32-core/eeprom/defaults.ts`); see
 `packages/am32-cli/src/commands/settings.ts` for why the CLI drops all six where
 the web app drops only `CAN_SETTINGS`.
+
+# `firmware.hex`
+
+A 1 KiB Intel HEX firmware image for the simulated F051, so that
+`scripts/assert-cli-sim.sh` can exercise `flash` against the **built** binary. That
+is the command whose pre-flight is most exposed to a bundling mistake — `parseHex`
+runs inside the bundle before anything is opened — which is the whole reason the gate
+exists, and it was the one command the gate could not cover until this file existed.
+
+Two things make it a real test rather than a shape:
+
+- The body starts at `0x1000` (`firmware_start` for the F051 and the ARM64K part) and
+  is a recognisable ramp, so a stream written at the wrong base address fails the
+  bootloader's own `memcmp` rather than passing silently.
+- The 32 bytes at `0x7BE0` (`eeprom_offset - 32`) carry `ARK_4IN1_F051`, which is the
+  simulated ESC's own firmware name. So `checkImageMatchesEsc` **runs and passes**
+  rather than taking the "no name to check against" warning path — which is what a
+  hex with a blank name block would have done, quietly turning the MCU-layout check
+  into a no-op.
+
+`fixture.bin` doubles as the negative case: the gate feeds it to `flash --hex` and
+expects exit 3, because it is not Intel HEX at all.

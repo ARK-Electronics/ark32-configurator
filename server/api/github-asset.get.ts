@@ -62,22 +62,16 @@ export default defineEventHandler(async (event) => {
 
     const contentType =
         upstream.headers.get('content-type') || 'application/octet-stream';
-    const contentLength = upstream.headers.get('content-length');
     const disposition = upstream.headers.get('content-disposition');
+    const body = Buffer.from(await upstream.arrayBuffer());
 
     setResponseHeader(event, 'Content-Type', contentType);
-    if (contentLength) {
-        setResponseHeader(event, 'Content-Length', contentLength);
-    }
+    setResponseHeader(event, 'Content-Length', body.byteLength);
     if (disposition) {
         setResponseHeader(event, 'Content-Disposition', disposition);
     }
     // Short cache — firmware assets are immutable per URL
     setResponseHeader(event, 'Cache-Control', 'public, max-age=3600');
 
-    if (!upstream.body) {
-        return Buffer.from(await upstream.arrayBuffer());
-    }
-
-    return sendStream(event, upstream.body as unknown as NodeJS.ReadableStream);
+    return body;
 });

@@ -96,14 +96,15 @@
         {
             "id": "6",
             "title": "Verified settings write and flash",
-            "status": "in-progress",
+            "status": "done",
             "dependsOn": [
                 "5"
             ],
             "doneWhenCmd": "bash scripts/assert-core-hygiene.sh && bash scripts/assert-fault-coverage.sh",
             "doneWhen": "yarn verify, plus a test proving a settings write leaves bytes 13-16 and 176-183 unchanged, and a flash with esc[n].slowBy(600) still succeeding",
             "hardwareCheckpoint": "outstanding -- settings round-trip across a power cycle with the CAN block intact, plus a local .hex flash.",
-            "notes": "writeSettings with read-back verification, flash() with page handling, applyDefaults. Completes A and C. Drops the bootloader-version auto-write in getInfo."
+            "notes": "writeSettings with read-back verification, flash() with page handling, applyDefaults. Completes A and C. Drops the bootloader-version auto-write in getInfo.",
+            "handoffNote": "docs/plans/overhaul/notes/block-6.md"
         },
         {
             "id": "7",

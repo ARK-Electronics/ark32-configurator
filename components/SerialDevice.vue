@@ -724,7 +724,15 @@ const fetchDefaultSettingsImage = async (
         if (!url) {
             return null;
         }
-        const bytes = await fetch(url).then(res => res.arrayBuffer());
+        // The presigned URL can fail on its own -- a missing object, an expired
+        // signature, an S3 error document. Without this check that error body would
+        // *become* the default settings image: decoded, written to the ESC, and then
+        // verified, because it was written faithfully.
+        const response = await fetch(url);
+        if (!response.ok) {
+            return null;
+        }
+        const bytes = await response.arrayBuffer();
         return new Uint8Array(bytes);
     } catch {
         return null;

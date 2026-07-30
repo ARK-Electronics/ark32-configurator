@@ -20,7 +20,7 @@
  * by construction.
  */
 
-import { EepromLayout } from './layout';
+import { EepromLayout, type EepromLayoutKeys } from './layout';
 
 /**
  * `default_settings[]` from `AM32/Src/DroneCAN/DroneCAN.c:294-300`, verbatim.
@@ -82,7 +82,7 @@ export const DEFAULT_STARTUP_MELODY: readonly number[] =
  *    same node ID is how an ARK DroneCAN board stops working. Block 5's design
  *    decision 13, applied to the other path that writes a whole settings object.
  */
-export const DEFAULTS_PRESERVED_FIELDS: readonly string[] = [
+export const DEFAULTS_PRESERVED_FIELDS: readonly EepromLayoutKeys[] = [
     'BOOT_BYTE',
     'LAYOUT_REVISION',
     'BOOT_LOADER_REVISION',

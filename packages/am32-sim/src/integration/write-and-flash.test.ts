@@ -458,11 +458,19 @@ describe('fault knob: esc[n].slowBy(ms) -- a slow ESC must not fail a flash', ()
     });
 
     it('block 6 done-when: flashes an ESC that answers 600 ms late, verify included', async () => {
-        // Block 6's second done-when. 600 ms is above every *pre-block-2* budget
-        // and it now has to fit twice over per chunk -- the write and the read-back
-        // that verifies it -- so this is the test that would fail if either the
-        // policy stopped deriving its budgets from the FC's own numbers or the
-        // verify pass were bolted on with a literal timeout.
+        // Block 6's second done-when: an ESC 600 ms late on *every* 4-way command,
+        // with verification on, must still flash.
+        //
+        // Be precise about what this pins, because it is easy to overclaim. Every
+        // exchange in the flash has to have room for 600 ms on top of the FC's own
+        // budget, and the one that did not was the 32-byte firmware-name read, whose
+        // derivation is ~300 ms -- so at `HOST_MARGIN_MS = 250` this fails in
+        // `checkImageMatchesEsc`, before a single byte is written, with or without
+        // verification. The verify reads are comfortable by comparison (a 256-byte
+        // read is 1385 ms against ~765 ms of cost). What this test establishes is
+        // that the *whole* path tolerates the plan's stated 600 ms with the read-backs
+        // in it; `timeout-policy.test.ts > absorbs an ESC that answers every command
+        // 600 ms late` is where each exchange type is checked individually.
         const h = await inPassthrough();
         const esc = firstEsc(h);
         esc.slowBy(600);
@@ -475,6 +483,9 @@ describe('fault knob: esc[n].slowBy(ms) -- a slow ESC must not fail a flash', ()
         expect(Array.from(esc.peek(new Mcu(0x1F06).getFirmwareStart(), 8)))
             .toEqual(Array.from({ length: 8 }, (_, i) => (i * 7) & 0xFE));
         expect(Array.from(esc.canBlock)).toEqual([32, 1, 1, 10, 1, 200, 0, 1]);
+        // And it really was verifying: one read-back per chunk over the whole
+        // application region, all of them inside the budget at 600 ms late.
+        expect(esc.counts.read).toBeGreaterThan(100);
     });
 });
 
@@ -660,7 +671,12 @@ describe('Am32Session.flash: per-chunk verification', () => {
         await drive(h.clock, h.session.flash(0, firmwareHex()));
 
         // The page was streamed twice from its base, and the image is intact.
-        expect(addresses.filter(address => address === pageBase).length).toBeGreaterThanOrEqual(2);
+        //
+        // Three, not two: one clean pass over a page already addresses its base twice
+        // -- once for the chunk write and once for the read-back that verifies it --
+        // so `>= 2` is satisfied by a retry that resumes at the failed chunk and
+        // proves nothing. Two passes give four.
+        expect(addresses.filter(address => address === pageBase).length).toBeGreaterThanOrEqual(3);
         // Re-writing a page pauses the bar rather than rewinding it. A bar that goes
         // backwards is the usual symptom of a miscounted page loop, and this is the
         // only case that can produce one.
@@ -800,6 +816,44 @@ describe('Am32Session.applyDefaults', () => {
         expect(Array.from(after.slice(13, 17))).toEqual([0xDE, 0xAD, 0xBE, 0xEF]);
     });
 
+    it('does not set the boot byte on a board that has none', async () => {
+        // The identity assertion in the test above is vacuous for this one byte,
+        // because the simulated ESC and the default image both hold 0x01. This is
+        // the case that matters: a half-flashed board, where the bootloader is
+        // holding on precisely because byte 0 is 0x00. Writing the default image's
+        // 0x01 would tell it a complete application is present and send it jumping
+        // into one that is not there
+        // (`AM32-bootloader/bootloader/main.c:306-319`).
+        const h = await inPassthrough();
+        const esc = firstEsc(h);
+        esc.poke(esc.eepromOffset + EepromLayout.BOOT_BYTE.offset, [0x00]);
+
+        await drive(h.clock, h.session.applyDefaults(0));
+
+        expect(esc.eeprom[EepromLayout.BOOT_BYTE.offset]).toBe(0x00);
+        // The tunables still landed, so this is not passing because nothing happened.
+        expect(esc.eeprom[EepromLayout.TIMING_ADVANCE.offset]).toBe(0x1A);
+    });
+
+    it('does not copy a CAN block out of a full-length defaults image', async () => {
+        // Also vacuous in the test above, for the opposite reason: a 48-byte image
+        // has no CAN block for the patch to carry. `ApplyDefaultsOptions.image`
+        // accepts a full 192 bytes, and then dropping CAN_SETTINGS is the only thing
+        // standing between "apply defaults to all four" and four ESCs with the same
+        // DroneCAN node ID.
+        const h = await inPassthrough();
+        const esc = firstEsc(h);
+        const image = new Uint8Array(EEPROM_SIZE).fill(0x00);
+        image[EepromLayout.LAYOUT_REVISION.offset] = 3;
+        image[EepromLayout.TIMING_ADVANCE.offset] = 21;
+        image.set([99, 98, 97, 96, 95, 94, 93, 92], EepromLayout.CAN_SETTINGS.offset);
+
+        await drive(h.clock, h.session.applyDefaults(0, { image }));
+
+        expect(Array.from(esc.canBlock)).toEqual([32, 1, 1, 10, 1, 200, 0, 1]);
+        expect(esc.eeprom[EepromLayout.TIMING_ADVANCE.offset]).toBe(21);
+    });
+
     it('clears the startup melody, because 0xFF is the no-melody marker', async () => {
         const h = await inPassthrough();
         const esc = firstEsc(h);
@@ -893,7 +947,8 @@ describe('fault knob: esc[n].failingFlashCell -- a page only a re-erase can repa
 
         await drive(h.clock, h.session.flash(0, firmwareHex()));
 
-        expect(addresses.filter(address => address === pageBase).length).toBeGreaterThanOrEqual(2);
+        // See the note on the same assertion above for why this is 3 and not 2.
+        expect(addresses.filter(address => address === pageBase).length).toBeGreaterThanOrEqual(3);
         expect(Array.from(esc.peek(pageBase, 512)))
             .toEqual(Array.from({ length: 512 }, (_, i) => (i * 7) & 0xFE));
         expect(esc.eeprom[EepromLayout.BOOT_BYTE.offset]).toBe(0x01);

@@ -704,8 +704,17 @@ describe('Am32Session.flash: per-chunk verification', () => {
         const esc = firstEsc(h);
         esc.silentWriteFailure = true;
 
-        await expect(drive(h.clock, h.session.flash(0, firmwareHex())))
-            .rejects.toMatchObject({ name: 'SessionError', reason: 'esc-verify', target: 0 });
+        const failure = await drive(h.clock, h.session.flash(0, firmwareHex()))
+            .then(() => null, (error: unknown) => error as { reason?: string, message?: string });
+
+        expect(failure?.reason).toBe('esc-verify');
+        // It failed *on the boot byte*, not on the first firmware page. Asserting the
+        // reason alone is not enough: with the boot-byte write unverified the flash
+        // still fails, one page later, with the same reason and the same end state.
+        expect(failure?.message).toContain('boot byte');
+        // And the attempt bound held: four write-and-verify attempts at the page,
+        // then it gives up rather than sitting there.
+        expect(esc.counts.write).toBe(4);
 
         expect(esc.eeprom[EepromLayout.BOOT_BYTE.offset]).toBe(0x01);
         // Nothing above the firmware start was touched.

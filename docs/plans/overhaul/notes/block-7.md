@@ -11,7 +11,9 @@ Landed on `master` on top of `dd23faf`:
 | `e54d5a0` | `docs(testing): record ark32 --sim as a test layer and a checkpoint tool` |
 | `577dacb` | `fix(cli): fail a zero-channel FC for every command, not only enumerate` |
 | `aba19c6` | `fix(cli): restore the zero-channel guard that a mutation revert ate` |
-| (see "What the diff review changed") | the review's findings |
+| `7b4921b` | `fix(cli): drop the exports map from a bin-only package` |
+| `c17af31` | `test(cli): pin the two flags whose only effect is a duration` |
+| `634e767` | `fix(cli): act on the diff review's findings` |
 | this file | the handoff note |
 
 **Nothing outside `packages/`, `scripts/`, `.github/workflows/`, `docs/` and the two
@@ -22,11 +24,11 @@ is purely additive: two new packages, two build scripts, one gate, one workflow.
 ## Verification
 
 ```
-yarn verify                          → exit 0  (lint 0 errors / 10 warnings, typecheck:core + typecheck:app clean, 453 tests in 22 files)
+yarn verify                          → exit 0  (lint 0 errors / 10 warnings, typecheck:core + typecheck:app clean, 478 tests in 23 files)
                                        three consecutive runs, identical
 done-when (STATUS.json block 7)      → exit 0
   test -d packages/am32-cli && test -d packages/am32-node
-bash scripts/assert-cli-sim.sh       → exit 0  (block 7's own gate, 29 checks)
+bash scripts/assert-cli-sim.sh       → exit 0  (block 7's own gate, 31 checks)
 bash scripts/assert-core-hygiene.sh  → exit 0
 bash scripts/assert-fault-coverage.sh→ exit 0  (12 knobs, all with a suite named after them)
 bash scripts/assert-deleted.sh       → exit 0
@@ -34,15 +36,16 @@ yarn build                           → exit 0  (fresh .output; see block 6's w
 ./run.sh --no-browser                → dev server on :3067, GET /configurator 200, vue-tsc 0 errors
 ```
 
-Test counts: 319 → **453**. The six new files:
+Test counts: 319 → **478**. The seven new files:
 
 | File | Tests |
 |---|---|
 | `packages/am32-cli/src/args.test.ts` | 38 |
-| `packages/am32-cli/src/run.test.ts` | 45 |
-| `packages/am32-cli/src/commands/settings.test.ts` | 14 |
-| `packages/am32-cli/src/exit.test.ts` | 11 |
-| `packages/am32-node/src/node-serial-transport.test.ts` | 17 |
+| `packages/am32-cli/src/run.test.ts` | 55 |
+| `packages/am32-cli/src/commands/settings.test.ts` | 16 |
+| `packages/am32-cli/src/commands/targets.test.ts` | 8 |
+| `packages/am32-cli/src/exit.test.ts` | 14 |
+| `packages/am32-node/src/node-serial-transport.test.ts` | 19 |
 | `packages/am32-node/src/serialport-loader.test.ts` | 9 |
 
 Lint is unchanged at **10 warnings, 0 errors**. Nothing in the new packages writes to
@@ -356,6 +359,9 @@ time — three notes in a row have warned that `git checkout --` restores from `
 | the loader accepts any module that imports | 1 failed |
 | the loader gives up after the first candidate | 3 failed |
 | a zero-channel FC is accepted (the guard removed from `withRig`) | 2 failed |
+| `commandWrite` hard-codes `layoutRevision = 2` | 1 failed |
+| `commandWrite` hard-codes `layoutRevision = 0` | 1 failed |
+| `commandWrite` hard-codes `layoutRevision = 3` | **0 failed -- and that is correct**, see below |
 
 And against the gate script, which checks different things:
 
@@ -403,6 +409,103 @@ arguments` is *also* exit 3. The gate checks the exit-code **table**; it cannot 
 one exit-3 reason from another and should not try. `args.test.ts` asserts on the
 messages, and that mutation turns it red. Recorded so nobody "fixes" the gate by
 teaching it to grep stderr — that would make it a worse test of the thing it is for.
+
+## What the diff review changed
+
+A subagent reviewed the diff against block 7's done-when in a fresh context. It
+confirmed the done-when, checked scope was clean by diffing the app layer and the
+three existing packages (empty), verified `checkImageMatchesEsc` runs *before*
+`writeBootByte` so exit 3's "nothing was written" premise actually holds, probed the
+gate for decorativeness (it is not: removing the `defaults` dispatch case, routing
+`note()` to stdout, and collapsing a connect failure to 1 each turned it red), and
+ran **16 mutations of its own**, of which 4 survived. It found six correctness
+defects and five coverage gaps, all fixed in `634e767`.
+
+**The correctness six.** Two were in my pump and my teardown, and both are the same
+kind of mistake — a bound or a `catch` attached one level in from where it belongs:
+
+1. **`driveVirtualClock` bounded idle rounds but not productive ones.** A callback
+   that keeps rescheduling a timer makes *every* round productive, so `idle` resets
+   forever and the CLI spins with no output and no diagnostic. `VirtualClock.runAll`
+   guards exactly this with `MAX_TIMER_FIRINGS`; the CLI's pump is the one clock
+   driver in the repo a user is actually waiting on, and it was the one without the
+   guard. It has the same constant now.
+2. **`withRig`'s `finally` could replace the command's own result**, contradicting
+   the comment directly above it. The `.catch` was on `session.disconnect()`, not on
+   `drive(...)` — so a pump deadlock or timer storm *during teardown* escaped the
+   `finally` and overwrote the exit code the command had already earned.
+3. **`NodeSerialTransport.emit` had no `running` guard.** `fail()` cannot detach the
+   port's own handler — it may be running inside it — so a dead port kept delivering
+   frames while `isOpen` was false, and the link could accept one as the answer to an
+   exchange whose caller had already been told it failed. `WebSerialTransport` gets
+   this for free by stopping its read loop; here it had to be said.
+4. **`open()` after a failure leaked the dead port**, listeners attached and, on real
+   hardware, its file descriptor with it. `running` was false so the idempotence
+   check let it through, and `this.port` still held the corpse.
+5. **`enumerate --json` omitted `reason`** where every other per-channel command
+   carries it, so the array's keys depended on the outcome — something every consumer
+   would have to guard. It is now always present and always `null`, with the reason
+   why written down: `EscResult` has no reason to report, being the one per-channel
+   API that swallows failures itself.
+6. **The Windows smoke test could ship a broken binary green.** `$ErrorActionPreference
+   = 'Stop'` does not stop a failing *native* command, only a cmdlet, and only the last
+   statement's exit code reaches GitHub's epilogue — which was a `Remove-Item`. So a
+   failing `ark32 --sim enumerate` on the win32 runner would have been invisible.
+   `$PSNativeCommandUseErrorActionPreference = $true` closes it.
+
+**The coverage five**, of which the first is the one that mattered:
+
+1. **Eight of the eleven `--fault` knobs were parsed and never proven to arm
+   anything.** `corruptCrc`, `shortRead`, `silentWriteFailure`, `failingFlashCell`,
+   `fc=blockingFourWay`, `fc=mspError`, `link=dropBytes` and `link=injectGarbage` all
+   had parse tests and nothing that fired them through the CLI. TypeScript covers the
+   value shapes; it cannot cover aiming a knob at the wrong ESC or at the FC instead
+   of the link. Section 3 sells `--sim --fault` as *the* hardware-free way to
+   reproduce a reported failure, so a knob that silently does not fire is precisely
+   the failure that matters. All eleven now assert an observable consequence.
+2. **`flash` was the one command the gate could not run**, for want of a `.hex`
+   fixture — and it is the command whose pre-flight (`parseHex` inside the bundle) is
+   most exposed to the bundling mistake the gate exists to catch. `fixtures/firmware.hex`
+   closes it, and `fixture.bin` doubles as the negative case (exit 3, not Intel HEX).
+3. **`targets.ts` had no test of its own.** The re-sort was a stated contract
+   ("a script reading `escs[0]` should get the lowest channel") that nothing checked,
+   and removing it left everything green. `commands/targets.test.ts` pins it, along
+   with the partial-safety and the "same keys whatever the outcome" property.
+4. **`--fc` and `--timeout-scale` had no coverage past the parser** — they change
+   durations and nothing else, so a `--sim` run with no faults completes identically
+   whether either is wired through or not. `timeoutPolicyFor` is extracted so it can
+   be asserted (`c17af31`).
+5. **The `exports` map on a bin-only package** pointed at `./src/*.ts`, which the
+   tarball does not contain (`7b4921b`).
+
+**Two of its findings turned out to be the code being right, and chasing them taught
+me the more useful thing.**
+
+- It flagged that hard-coding `layoutRevision = 3` in `commandWrite` leaves every
+  test green — block 6's exact bug, apparently untested. It does, and that is
+  correct: `writeSettings` calls `encodeSettings` with the revision read off the
+  **ESC's own image**, so a field the ESC does not have is dropped there whatever the
+  patch contains. Too *high* a revision cannot write a wrong field. The real failure
+  is too *low* — decoding a revision-3 ESC's file at revision 2 silently omits the
+  eight tunables at 0x05–0x0C, with `changed: true` and no warning. My first attempt
+  at a test asserted the harmless direction and was therefore vacuous; the
+  replacement pins the direction that bites, and `= 2` and `= 0` both go red while
+  `= 3` stays green. The asymmetry is now written down where someone would otherwise
+  "simplify" it to a constant.
+- It flagged `exit.ts`'s `image → 3` row as unreachable through `run()`, which it is:
+  every `SessionError('image')` is raised inside `forEachTarget` and becomes a
+  per-target outcome. Kept anyway, with the reachability stated, because
+  `exitCodeForError` is a *total mapping over a closed enum* rather than a guard —
+  block 3's "a check that looks load-bearing and never runs" is about guards, and
+  giving a future caller outside a target walk a silent 1 would be worse. The
+  redundant `outcomes.length === 0` early return it also found **is** gone: that one
+  made `expect(exitCodeForTargets([])).toBe(EXIT_OK)` pass for the wrong reason.
+
+**One process finding, which is mine and not the code's.** While mutation-testing,
+the reviewer's own `git checkout -- packages/am32-cli/src/run.ts` raced with my
+uncommitted edit to the same file — the second time in this block that a revert ate
+work. Same lesson, from the other direction: a shared working tree has exactly one
+`HEAD`, and a subagent reviewing a diff will revert files to it.
 
 ## Where the plan was wrong, stale, or impossible
 
@@ -551,6 +654,14 @@ Two inherited notes I checked and found still true:
   than leave a field nothing read. So `--fault escN=slowBy:600` models latency in the
   path, not an ESC that is slow internally. Block 6's note has the full argument; the
   CLI inherits it unchanged.
+- **`read --esc all -o DIR` does its filesystem work inside the driven region.**
+  `run.ts`'s comment says the files are written after the session work, and they are
+  written after the session *calls* -- but still inside `drive()`, so each `mkdir` and
+  `writeFile` costs an idle round of the pump. Safe at any realistic ESC count (the
+  bound is 1000 idle rounds against 1 + N awaits) and the reviewer was right that the
+  comment overstates it. Moving the write outside `withRig` means threading the file
+  list back through the dispatch, which is more plumbing than the problem deserves at
+  four ESCs; if a future command does bulk I/O per channel, that is the change.
 - **`ark32 trace` does not exist.** Section 9 lists recorded-trace conformance as
   deferred-but-not-forbidden and says "if `ark32 trace` in block 7 makes capture
   cheap, replaying traces against `SimFc` is a reasonable follow-up". Block 7's

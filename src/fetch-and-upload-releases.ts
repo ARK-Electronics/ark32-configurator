@@ -64,8 +64,8 @@ export default async function (minTag?: string) {
         }
     }
 
-    const bootloaderOwner = process.env.GITHUB_BOOTLOADER_OWNER || firmwareOwner;
-    const bootloaderRepo = process.env.GITHUB_BOOTLOADER_REPO || firmwareRepo;
+    const bootloaderOwner = process.env.GITHUB_BOOTLOADER_OWNER || 'ARK-Electronics';
+    const bootloaderRepo = process.env.GITHUB_BOOTLOADER_REPO || 'ARK32-bootloader';
     const bootloader = await octo.rest.repos.listReleases({
         owner: bootloaderOwner,
         repo: bootloaderRepo

@@ -156,8 +156,7 @@ function bootloaderOwner (): string {
 }
 
 function bootloaderRepo (): string {
-    // Default to same ARK32 repo if no separate bootloader repo is set
-    return env('GITHUB_BOOTLOADER_REPO') || env('GITHUB_FIRMWARE_REPO') || 'ARK32';
+    return env('GITHUB_BOOTLOADER_REPO') || 'ARK32-bootloader';
 }
 
 export const GITHUB_FILE_SOURCES = {

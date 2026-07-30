@@ -9,6 +9,8 @@ Landed on `master` on top of `dd23faf`:
 | `ac03fb0` | `build(cli): bundle ark32, gate it against the simulator, and ship five targets` |
 | `096ca42` | `test(cli): pin that exit 3 means nothing was opened, and that a pipe is not a failure` |
 | `e54d5a0` | `docs(testing): record ark32 --sim as a test layer and a checkpoint tool` |
+| `577dacb` | `fix(cli): fail a zero-channel FC for every command, not only enumerate` |
+| `aba19c6` | `fix(cli): restore the zero-channel guard that a mutation revert ate` |
 | (see "What the diff review changed") | the review's findings |
 | this file | the handoff note |
 
@@ -20,11 +22,11 @@ is purely additive: two new packages, two build scripts, one gate, one workflow.
 ## Verification
 
 ```
-yarn verify                          → exit 0  (lint 0 errors / 10 warnings, typecheck:core + typecheck:app clean, 451 tests in 22 files)
-                                       two consecutive runs, identical
+yarn verify                          → exit 0  (lint 0 errors / 10 warnings, typecheck:core + typecheck:app clean, 453 tests in 22 files)
+                                       three consecutive runs, identical
 done-when (STATUS.json block 7)      → exit 0
   test -d packages/am32-cli && test -d packages/am32-node
-bash scripts/assert-cli-sim.sh       → exit 0  (block 7's own gate, 33 checks)
+bash scripts/assert-cli-sim.sh       → exit 0  (block 7's own gate, 29 checks)
 bash scripts/assert-core-hygiene.sh  → exit 0
 bash scripts/assert-fault-coverage.sh→ exit 0  (12 knobs, all with a suite named after them)
 bash scripts/assert-deleted.sh       → exit 0
@@ -32,12 +34,12 @@ yarn build                           → exit 0  (fresh .output; see block 6's w
 ./run.sh --no-browser                → dev server on :3067, GET /configurator 200, vue-tsc 0 errors
 ```
 
-Test counts: 319 → **451**. The six new files:
+Test counts: 319 → **453**. The six new files:
 
 | File | Tests |
 |---|---|
 | `packages/am32-cli/src/args.test.ts` | 38 |
-| `packages/am32-cli/src/run.test.ts` | 43 |
+| `packages/am32-cli/src/run.test.ts` | 45 |
 | `packages/am32-cli/src/commands/settings.test.ts` | 14 |
 | `packages/am32-cli/src/exit.test.ts` | 11 |
 | `packages/am32-node/src/node-serial-transport.test.ts` | 17 |
@@ -353,6 +355,7 @@ time — three notes in a row have warned that `git checkout --` restores from `
 | the loader tries the beside-the-exe path first | 2 failed |
 | the loader accepts any module that imports | 1 failed |
 | the loader gives up after the first candidate | 3 failed |
+| a zero-channel FC is accepted (the guard removed from `withRig`) | 2 failed |
 
 And against the gate script, which checks different things:
 
@@ -370,6 +373,28 @@ nothing about *when* the file was rejected — which is the entire point of exit
 Both now assert that the session's `state` channel never reaches `connecting`, and
 both mutations go red. This is block 6's lesson arriving again: a test that fails is
 not the same as a test that fails for the reason you think.
+
+**One real defect, and I found it by re-reading rather than by mutating.** A flight
+controller that entered passthrough and reported **0 ESCs** was handled in
+`commandEnumerate` alone, so `enumerate` exited 2 while `set --esc all`,
+`write --esc all`, `defaults --esc all`, `reset --esc all` and `get --esc all` each
+exited **0** having walked an empty target list — reporting success for doing nothing
+at all. `--esc 1` already failed, as a channel the FC will not address, and noticing
+that asymmetry is what exposed it. The check now lives in `withRig` so all eight
+per-channel commands report it identically (`577dacb`). No mutation would have found
+this: the guard I would have broken was in the wrong place, and breaking it there
+turned exactly one test red, which is what it had always done.
+
+⚠️ **`git checkout --` ate that fix, exactly as blocks 4, 5 and 6 each warned, and I
+had read all three notes.** The sequence: land the fix, mutate `run.ts` to confirm the
+new tests go red, revert with `git checkout -- packages/am32-cli/src/run.ts` — which
+restores from `HEAD` and therefore deletes the fix along with the mutation — and then
+commit a tree whose tests were red. `577dacb` is that commit; `aba19c6` is the
+restore. **"Commit before you mutate" is not sufficient advice.** The commit protects
+work made *before* the mutation, and the fix was made before it — the problem is that
+the revert restores from `HEAD` and my fix was not in `HEAD` yet. The rule that
+actually works: **re-run the suite after every revert, not only after every mutation.**
+It took ten seconds and would have caught it immediately.
 
 **One gate mutation survived, and it is the right answer rather than a hole.**
 Removing the unknown-flag guard leaves `assert-cli-sim.sh` green, because `--fast`
@@ -537,7 +562,15 @@ Two inherited notes I checked and found still true:
   changes. I did not author that line, and every other commit in this block staged
   explicit paths so it could not be swept in by accident. Same as blocks 1b through 6.
 
-## Three things I would tell the next block's agent
+## Four things I would tell the next block's agent, in the order they cost me
+
+0. **Re-run the suite after every revert, not only after every mutation.** Blocks 4,
+   5 and 6 all warn that `git checkout --` restores from `HEAD`; I read all three and
+   still lost a fix to it, because "commit before you mutate" protects work made
+   before the mutation and my fix *was* made before it — it just was not in `HEAD`
+   yet. I then committed a tree with two red tests. Ten seconds of `yarn vitest run`
+   after the revert catches it. This is item zero because it is the only one that
+   costs you a commit.
 
 1. **The exit code is a specification, and it is the easiest thing in a CLI to get
    accidentally right.** Two of my tests asserted exit 3 for a bad input file and

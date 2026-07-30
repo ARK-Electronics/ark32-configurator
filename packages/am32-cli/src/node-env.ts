@@ -23,10 +23,40 @@ import type { NodePortInfo } from 'am32-node/serialport-types';
 import type { CliEnv, OpenPortRequest } from './env';
 import { VERSION } from './version';
 
+/**
+ * A writer that survives `ark32 ports | head`.
+ *
+ * Node does not die on SIGPIPE the way a C program does -- it turns the closed
+ * pipe into an `EPIPE` write error instead. Unhandled, that propagates out of
+ * `reporter.finish`, is caught by `run`'s catch-all and becomes **exit 1**: so
+ * `ark32 get --esc 1 | head` would report a partial failure to a script under
+ * `set -o pipefail`, for a pipeline that did exactly what was asked.
+ *
+ * Once the far end is gone there is nowhere to report anything, so a broken stream
+ * becomes a silent no-op rather than an error to raise.
+ */
+function pipeSafeWriter (stream: NodeJS.WriteStream): (text: string) => void {
+    let broken = false;
+    stream.on('error', () => {
+        broken = true;
+    });
+
+    return (text) => {
+        if (broken) {
+            return;
+        }
+        try {
+            stream.write(text);
+        } catch {
+            broken = true;
+        }
+    };
+}
+
 export function createNodeEnv (): CliEnv {
     return {
-        stdout: text => process.stdout.write(text),
-        stderr: text => process.stderr.write(text),
+        stdout: pipeSafeWriter(process.stdout),
+        stderr: pipeSafeWriter(process.stderr),
 
         readFile: async (path) => {
             const buffer = await readFile(path);

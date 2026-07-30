@@ -1,0 +1,191 @@
+name: Release ark32
+
+# The five per-target artifacts issue #3 section 6 asks for, plus the npm package.
+#
+# Deliberately NOT on every push. `ci.yml` smoke-tests `ark32 --sim` on every push,
+# which is what catches a broken CLI; building five platforms takes five runners and
+# has nothing new to say about a commit that did not touch the CLI. This runs when a
+# release is published, or on demand.
+#
+# Two things worth knowing before editing this file.
+#
+# **Node SEA cannot cross-compile.** The blob is injected into a copy of the running
+# `node` binary, so each target needs a runner of that OS and architecture. That is
+# why this is a five-way matrix and not one job with a `--target` flag.
+#
+# **Each artifact is a directory, not a file.** `serialport` is an N-API addon and
+# no bundler can inline a `.node` binding -- section 6 says so explicitly -- so the
+# archive carries `ark32` plus `node_modules/serialport`. `--sim`, `--help` and
+# `--version` work from the executable alone; the hardware commands load the sibling
+# copy. See `packages/am32-node/src/serialport-loader.ts`.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      publish_npm:
+        description: 'Also publish @ark/am32-cli to npm'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  binaries:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      # One red platform must not hide the other four.
+      fail-fast: false
+      matrix:
+        include:
+          - target: linux-x64
+            runner: ubuntu-latest
+            archive: tar.gz
+          - target: linux-arm64
+            runner: ubuntu-24.04-arm
+            archive: tar.gz
+          - target: darwin-x64
+            runner: macos-13
+            archive: tar.gz
+          - target: darwin-arm64
+            runner: macos-14
+            archive: tar.gz
+          - target: win32-x64
+            runner: windows-latest
+            archive: zip
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+
+      - name: Enable Yarn 4
+        run: corepack enable
+
+      - name: Install
+        run: yarn install --immutable
+
+      # No compiler and no network: @serialport/bindings-cpp ships prebuilds for
+      # every one of these targets inside its own tarball, so the copy Yarn just
+      # installed is the right one to stage beside the executable.
+      - name: Build the standalone binary
+        run: node scripts/build-cli-binary.mjs --out standalone
+
+      # The whole reason to build five of these is to know they run. A binary that
+      # was produced and never executed is an artifact, not a release.
+      - name: Smoke-test it (POSIX)
+        if: runner.os != 'Windows'
+        run: |
+          set -e
+          cp packages/am32-cli/fixtures/fixture.bin standalone/
+          cd standalone
+          ./ark32 --version
+          ./ark32 --sim enumerate --escs 4
+          ./ark32 --sim write --esc all -i fixture.bin
+          ./ark32 ports
+          rm fixture.bin
+
+      - name: Smoke-test it (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Copy-Item packages/am32-cli/fixtures/fixture.bin standalone/
+          Set-Location standalone
+          ./ark32.exe --version
+          ./ark32.exe --sim enumerate --escs 4
+          ./ark32.exe --sim write --esc all -i fixture.bin
+          ./ark32.exe ports
+          Remove-Item fixture.bin
+
+      - name: Archive (tar.gz)
+        if: matrix.archive == 'tar.gz'
+        run: tar -czf "ark32-${{ matrix.target }}.tar.gz" -C standalone .
+
+      - name: Archive (zip)
+        if: matrix.archive == 'zip'
+        shell: pwsh
+        run: Compress-Archive -Path standalone/* -DestinationPath "ark32-${{ matrix.target }}.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ark32-${{ matrix.target }}
+          path: ark32-${{ matrix.target }}.${{ matrix.archive }}
+          if-no-files-found: error
+
+      # `actions/upload-artifact` output cannot be used as a download: it needs
+      # authentication, it is zipped again, and it expires. A release asset can.
+      - name: Attach to the release
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ github.event.release.tag_name }}" "ark32-${{ matrix.target }}.${{ matrix.archive }}" --clobber
+
+  npm:
+    name: npm
+    runs-on: ubuntu-latest
+    # Only after every binary is known good: if the CLI is broken on a platform,
+    # publishing the same code to npm is the wrong move.
+    needs: binaries
+    if: github.event_name == 'release' || inputs.publish_npm
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          registry-url: https://registry.npmjs.org
+
+      - name: Enable Yarn 4
+        run: corepack enable
+
+      - name: Install
+        run: yarn install --immutable
+
+      # `prepack` in packages/am32-cli runs scripts/build-cli.mjs, which is also
+      # where the version check lives -- so a manifest that disagrees with
+      # src/version.ts fails here rather than shipping a CLI whose --version lies.
+      - name: Pack
+        run: yarn workspace @ark/am32-cli pack --out /tmp/ark32-cli.tgz
+
+      # Everything below runs against the *tarball*, not the workspace: the point is
+      # to check the artifact that will be published rather than the tree it came
+      # from. `am32-core`, `am32-node` and `am32-sim` are inlined by esbuild and
+      # declared as devDependencies, so `serialport` has to be the only runtime
+      # dependency -- anything else means a workspace package leaked into the
+      # manifest and `npm i -g` would fail on a version that was never published.
+      - name: Check and run the tarball
+        run: |
+          set -e
+          mkdir -p /tmp/staged
+          tar -xzf /tmp/ark32-cli.tgz -C /tmp/staged --strip-components=1
+          node -e '
+            const manifest = require("/tmp/staged/package.json");
+            const deps = Object.keys(manifest.dependencies ?? {});
+            if (deps.length !== 1 || deps[0] !== "serialport") {
+              throw new Error(`unexpected runtime dependencies: ${deps.join(", ") || "(none)"}`);
+            }
+            if (manifest.bin?.ark32 !== "./dist/ark32.mjs") {
+              throw new Error("the bin entry moved");
+            }
+          '
+          chmod +x /tmp/staged/dist/ark32.mjs
+          cp packages/am32-cli/fixtures/fixture.bin /tmp/staged/
+          cd /tmp/staged
+          ./dist/ark32.mjs --version
+          ./dist/ark32.mjs --sim enumerate --escs 4
+          ./dist/ark32.mjs --sim write --esc all -i fixture.bin
+
+      # `npm publish` rather than `yarn npm publish` so that what is published is
+      # the tarball the step above just ran, not a fresh pack of the workspace.
+      # (CLAUDE.md's "never npm install" is about this repo's dependencies; nothing
+      # here installs anything.)
+      - name: Publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish /tmp/ark32-cli.tgz --access public

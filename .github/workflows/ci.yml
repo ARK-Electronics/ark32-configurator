@@ -54,6 +54,18 @@ jobs:
       - name: Test
         run: yarn test
 
+      # `yarn test` covers all of this against `run()` in-process. This covers the
+      # thing it cannot: that the *built* binary has it. Between the two sit the
+      # esbuild bundle, the shebang, the `bin` link and the argv/exit-code plumbing
+      # in main.ts -- a bundling mistake breaks the binary and leaves the suite
+      # green. It also re-runs `yarn install`, because the `bin` link only appears
+      # once dist/ exists.
+      - name: Smoke-test ark32 --sim (block 7's done-when)
+        run: |
+          yarn build:cli
+          yarn install --immutable
+          bash scripts/assert-cli-sim.sh
+
   build:
     runs-on: ubuntu-latest
     steps:

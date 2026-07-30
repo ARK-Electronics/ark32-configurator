@@ -66,7 +66,6 @@
     "@pinia/nuxt": "^0.5.1",
     "@prisma/adapter-mariadb": "^7.5.0",
     "@prisma/client": "^7.5.0",
-    "prisma": "^7.5.0",
     "ajv": "^8.12.0",
     "bcrypt": "^5.1.1",
     "better-sqlite3": "^12.5.0",
@@ -80,6 +79,7 @@
     "nuxt-svgo": "^4.0.3",
     "octokit": "^3.1.2",
     "pinia": "^2.1.7",
+    "prisma": "^7.5.0",
     "semver": "^7.6.0",
     "tsx": "^4.21.0",
     "vue-matomo": "^4.2.0"

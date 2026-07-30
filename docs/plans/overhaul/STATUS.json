@@ -109,7 +109,7 @@
         {
             "id": "7",
             "title": "Headless CLI",
-            "status": "todo",
+            "status": "in-progress",
             "dependsOn": [
                 "6"
             ],

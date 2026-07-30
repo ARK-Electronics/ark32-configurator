@@ -314,9 +314,32 @@ async function withRig (
     try {
         return await drive(async () => {
             const fc = await session.connect();
-            const escCount = NEEDS_PASSTHROUGH.has(args.command)
-                ? await session.enterPassthrough()
-                : 0;
+            if (!NEEDS_PASSTHROUGH.has(args.command)) {
+                return work({ session, transport, clock, escCount: 0, fc, drive, description });
+            }
+
+            const escCount = await session.enterPassthrough();
+            if (escCount === 0) {
+                // Checked here rather than per command, so that *every* per-channel
+                // command reports it the same way. It has to be an error: with
+                // `--esc all` there is nothing to walk, so `set`, `write`, `flash`
+                // and `reset` would each report exit 0 for having done nothing at
+                // all. (`--esc 1` already failed, as a channel the FC will not
+                // address -- which is how I found this.)
+                //
+                // Exit 2 rather than 1, because no ESC failed: none was addressable,
+                // and every other command against this FC is equally impossible.
+                // Betaflight reaches this state on a board with no configured motor
+                // outputs -- `esc4wayProcess` is installed unconditionally
+                // (`msp.c:328-333` is not guarded by the count) -- so the FC really
+                // does enter passthrough with nothing behind it.
+                throw new SessionError(
+                    'passthrough',
+                    'the flight controller entered 4-way passthrough and reported 0 ESCs, ' +
+                    'so there is nothing to address. On Betaflight this is a board with no ' +
+                    'configured motor outputs.'
+                );
+            }
 
             return work({
                 session, transport, clock, escCount, fc, drive, description

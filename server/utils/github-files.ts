@@ -143,15 +143,36 @@ export async function getGithubReleaseFolder (options: {
     return folder;
 }
 
+function firmwareOwner (): string {
+    return env('GITHUB_FIRMWARE_OWNER') || 'ARK-Electronics';
+}
+
+function firmwareRepo (): string {
+    return env('GITHUB_FIRMWARE_REPO') || 'ARK32';
+}
+
+function bootloaderOwner (): string {
+    return env('GITHUB_BOOTLOADER_OWNER') || 'ARK-Electronics';
+}
+
+function bootloaderRepo (): string {
+    // Default to same ARK32 repo if no separate bootloader repo is set
+    return env('GITHUB_BOOTLOADER_REPO') || env('GITHUB_FIRMWARE_REPO') || 'ARK32';
+}
+
 export const GITHUB_FILE_SOURCES = {
-    releases: {
-        owner: 'am32-firmware',
-        repo: 'am32',
-        folderName: 'releases'
+    get releases () {
+        return {
+            owner: firmwareOwner(),
+            repo: firmwareRepo(),
+            folderName: 'releases' as const
+        };
     },
-    bootloader: {
-        owner: 'am32-firmware',
-        repo: 'AM32-bootloader',
-        folderName: 'bootloader'
+    get bootloader () {
+        return {
+            owner: bootloaderOwner(),
+            repo: bootloaderRepo(),
+            folderName: 'bootloader' as const
+        };
     }
-} as const;
+};

@@ -26,7 +26,7 @@
         </div>
         <div class="text-center min-w-[300px] flex items-center gap-4">
           <div>
-            <NuxtLink class="underline" to="https://github.com/am32-firmware/am32" target="_blank" external>
+            <NuxtLink class="underline" to="https://github.com/ARK-Electronics/ARK32" target="_blank" external>
               Repository
             </NuxtLink>
           </div>

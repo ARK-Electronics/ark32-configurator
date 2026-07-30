@@ -6,9 +6,11 @@ import { useMinio } from '~/composables/useMinio';
 
 export default async function (minTag?: string) {
     const octo = new Octokit();
+    const firmwareOwner = process.env.GITHUB_FIRMWARE_OWNER || 'ARK-Electronics';
+    const firmwareRepo = process.env.GITHUB_FIRMWARE_REPO || 'ARK32';
     const releases = await octo.rest.repos.listReleases({
-        owner: 'am32-firmware',
-        repo: 'am32'
+        owner: firmwareOwner,
+        repo: firmwareRepo
     });
 
     const releasesData = await releases.data;
@@ -62,9 +64,11 @@ export default async function (minTag?: string) {
         }
     }
 
+    const bootloaderOwner = process.env.GITHUB_BOOTLOADER_OWNER || firmwareOwner;
+    const bootloaderRepo = process.env.GITHUB_BOOTLOADER_REPO || firmwareRepo;
     const bootloader = await octo.rest.repos.listReleases({
-        owner: 'am32-firmware',
-        repo: 'AM32-bootloader'
+        owner: bootloaderOwner,
+        repo: bootloaderRepo
     });
     
     const bootloaderData = await bootloader.data;

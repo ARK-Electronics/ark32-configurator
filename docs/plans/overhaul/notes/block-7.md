@@ -14,7 +14,8 @@ Landed on `master` on top of `dd23faf`:
 | `7b4921b` | `fix(cli): drop the exports map from a bin-only package` |
 | `c17af31` | `test(cli): pin the two flags whose only effect is a duration` |
 | `634e767` | `fix(cli): act on the diff review's findings` |
-| this file | the handoff note |
+| `8457ce2`, `a83fa39`, `1baffa2` | this note, and its two updates after the review |
+| `6277b6d` | `chore(plan): commit the driver's in-progress marker for block 7` |
 
 **Nothing outside `packages/`, `scripts/`, `.github/workflows/`, `docs/` and the two
 manifests changed.** `components/`, `pages/`, `stores/`, `composables/`, `src/`,
@@ -669,9 +670,18 @@ Two inherited notes I checked and found still true:
   `Link.stats` already counts exchanges, and a `Transport` decorator that tees both
   directions to a file is ~30 lines in `am32-cli` — no core change needed.
 - **`docs/plans/overhaul/STATUS.json` carries the driver's own `status: in-progress`
-  edit**, committed with this note because the block must leave no uncommitted
-  changes. I did not author that line, and every other commit in this block staged
-  explicit paths so it could not be swept in by accident. Same as blocks 1b through 6.
+  edit**, committed in `6277b6d` because the block must leave no uncommitted changes.
+  I did not author that line, and every other commit in this block staged explicit
+  paths so it could not be swept in by accident. Same as blocks 1b through 6.
+- ⚠️ **`577dacb` is a red commit and I chose not to rewrite it.** Its `run.ts` half
+  was eaten by a `git checkout --` revert (see "Mutate before you believe"), so
+  `yarn test` fails at exactly that commit; `aba19c6` restores it and everything from
+  there on is green. **`git bisect` across this block will stop there.** Squashing the
+  two would need a non-interactive rebase over four later commits, and having already
+  lost work to one git operation this session I judged the risk of a second worse than
+  the wart -- especially since nothing is pushed, so the driver can squash `aba19c6`
+  into `577dacb` cheaply if it prefers a clean history. The landing rule is that
+  *master* works, and `HEAD` does: `yarn verify` exits 0 and every gate is green.
 
 ## Four things I would tell the next block's agent, in the order they cost me
 

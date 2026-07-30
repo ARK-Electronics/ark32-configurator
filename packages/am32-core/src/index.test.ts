@@ -4,7 +4,7 @@ import { EEPROM_SIZE, type Transport } from './index';
 describe('am32-core skeleton', () => {
     it('pins EEPROM_SIZE to the 192-byte EEprom_t', () => {
         // Changing this means AM32's Inc/eeprom.h changed. Verify against the
-        // firmware before touching it -- see docs/plans/overhaul/STATUS.json.
+        // firmware before touching it.
         expect(EEPROM_SIZE).toBe(192);
     });
 

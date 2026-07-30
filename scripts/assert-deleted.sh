@@ -83,7 +83,6 @@ echo
 # components, pages, server, src, stores, utils, layouts, composables, nuxt.d.ts,
 # app.vue and run.ts, *including comments*. Naming one of them in a comment fails
 # the gate, which is why the code points at this file instead of listing them.
-# The names are recorded in docs/plans/overhaul/notes/block-5.md.
 echo "Legacy protocol stack (block 5)"
 assert_path_absent   src/communication                  "the app's second protocol stack -- Am32Session replaces it"
 assert_symbol_absent CommandQueue                       "commands.queue.ts"

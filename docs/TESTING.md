@@ -1,22 +1,24 @@
 # Testing the ARK32 configurator
 
+"Block N" throughout this file refers to the stages of the 2026-07 overhaul
+(issue #3); the per-block handoff notes are in git history under
+`docs/plans/overhaul/notes/`.
+
 Four layers, in increasing order of cost and decreasing order of how often they
 run.
 
 | Layer | Command | Runs on |
 |---|---|---|
-| Unit + property | `yarn test` | every push, every block |
-| Integration against the simulator | `yarn test` (same suite) | every push, every block |
+| Unit + property | `yarn test` | every push |
+| Integration against the simulator | `yarn test` (same suite) | every push |
 | The built `ark32` binary against the simulator | `bash scripts/assert-cli-sim.sh` | every push |
-| Hardware checkpoints | by hand, with a board plugged in | twice in the whole overhaul |
+| Hardware checkpoints | by hand, with a board plugged in | at the two fixed checkpoints below |
 
 `yarn verify` — `lint && typecheck:core && typecheck:app && test` — is the gate.
-It must exit 0 before any overhaul block is called done, and CI runs it on push
-and PR.
+It must exit 0 before anything lands, and CI runs it on push and PR.
 
 `assert-cli-sim.sh` is deliberately *not* part of `yarn verify`: it needs a build
-step, and every block so far has declined to change what `yarn verify` means. CI
-runs it as its own step, after `yarn build:cli`.
+step. CI runs it as its own step, after `yarn build:cli`.
 
 ## Unit and property tests
 
@@ -88,11 +90,11 @@ erases first, can repair it.
 
 The gate is a *presence* check. What proves a knob works is mutating its
 implementation and watching a specific test go red — see the mutation tables in
-`docs/plans/overhaul/notes/block-3.md` and `block-4.md`. Do that before believing
+the block-3 and block-4 handoff notes (git history). Do that before believing
 a new guard; block 3 found one that was unreachable and block 4 removed another
 for the same reason.
 
-## The `ark32` CLI (block 7)
+## The `ark32` CLI
 
 `ark32 --sim` runs any command against the same simulated rig the test suite uses
 — `createSimHarness`, one object graph, no second protocol stack. It is the third
@@ -123,7 +125,7 @@ clock the same run is milliseconds and deterministic. The cost, stated plainly:
 It cannot tell you a real USB link is fast enough.** That is what the hardware
 checkpoints are for.
 
-`scripts/assert-cli-sim.sh` is what a block runs. It covers what `yarn test`
+`scripts/assert-cli-sim.sh` covers what `yarn test`
 cannot: `yarn test` drives `run()` in-process, and between that and `ark32` sit
 the esbuild bundle, the shebang, the `bin` link and `main.ts`'s argv plumbing — a
 bundling mistake breaks the binary and leaves the suite green. It also pins the
@@ -265,8 +267,8 @@ firmware-version bytes and the CAN block — where the *web app's* "apply config
 file" preserves only the CAN block. So a round-trip through the CLI and a
 round-trip through the UI are **not** byte-identical if the file's identity bytes
 differ from the ESC's. The CLI's behaviour is the safer one and the reasoning is in
-`packages/am32-cli/src/commands/settings.ts`; the divergence is recorded in
-`docs/plans/overhaul/notes/block-7.md` as an app-side hazard worth closing.
+`packages/am32-cli/src/commands/settings.ts`; the divergence is an app-side
+hazard worth closing.
 
 What block 6 changed, so this checkpoint knows what it is looking at:
 

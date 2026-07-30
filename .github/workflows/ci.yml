@@ -54,13 +54,22 @@ jobs:
       - name: Test
         run: yarn test
 
+      # Regression gates from the 2026-07 overhaul (issue #3): deleted features
+      # stay deleted, the core stays clock-injected, and every simulator fault
+      # knob keeps a test naming it.
+      - name: Assert gates
+        run: |
+          bash scripts/assert-deleted.sh
+          bash scripts/assert-core-hygiene.sh
+          bash scripts/assert-fault-coverage.sh
+
       # `yarn test` covers all of this against `run()` in-process. This covers the
       # thing it cannot: that the *built* binary has it. Between the two sit the
       # esbuild bundle, the shebang, the `bin` link and the argv/exit-code plumbing
       # in main.ts -- a bundling mistake breaks the binary and leaves the suite
       # green. It also re-runs `yarn install`, because the `bin` link only appears
       # once dist/ exists.
-      - name: Smoke-test ark32 --sim (block 7's done-when)
+      - name: Smoke-test ark32 --sim
         run: |
           yarn build:cli
           yarn install --immutable
@@ -81,6 +90,7 @@ jobs:
       - name: Install
         run: yarn install --immutable
 
-      # Every block lands on master directly, so master must always build.
+      # `yarn verify` does not build the app (app.vue has no lang="ts", so a
+      # dangling import there only fails here). Master must always build.
       - name: Build
         run: yarn build

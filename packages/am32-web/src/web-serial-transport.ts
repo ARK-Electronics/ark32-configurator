@@ -3,10 +3,10 @@ import type { Transport } from 'am32-core/transport';
 /**
  * Web Serial {@link Transport}. Moves bytes, and nothing else.
  *
- * This replaces the third-party Web Serial wrapper package block 2 removed --
- * `docs/plans/overhaul/notes/block-2.md` names it, since the hygiene gate greps
- * these paths for the name. Every one of audit item E's defects lived in that
- * package or in the shim around it:
+ * This replaces the third-party Web Serial wrapper package the overhaul
+ * removed -- the hygiene gate greps these paths for its name, so it cannot be
+ * spelled out here (issue #3, audit item E, names it). Every one of that item's
+ * defects lived in the package or in the shim around it:
  *
  *  - **It patched the global timers at import time.** It installed a Web Worker
  *    "HackTimer" over `setTimeout`/`setInterval`, so every protocol timeout took

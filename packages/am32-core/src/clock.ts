@@ -13,8 +13,8 @@
  *     every timeout became a Web Worker `postMessage` round trip, injecting
  *     jitter into exactly the timing the protocol depends on. Taking time
  *     through an interface is what stops an equivalent creeping back in.
- *     (`docs/plans/overhaul/notes/block-2.md` names the package; the hygiene
- *     gate greps for it, so this file cannot.)
+ *     (The hygiene gate greps for that package's name, so this file cannot
+ *     spell it out.)
  *
  * The core tsconfig omits the `dom` lib and sets `types: []`, so `setTimeout`
  * is not even a declared name here. {@link createSystemClock} therefore reaches

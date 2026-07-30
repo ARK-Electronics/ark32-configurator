@@ -1,13 +1,12 @@
 /**
  * am32-core — the transport-agnostic protocol core.
  *
- * Block 1b filled in the framing, eeprom, mcu and hex layers. Block 2 added the
- * transport interface, the injectable clock and the link layer; block 4 adds
- * Am32Session. See docs/plans/overhaul/STATUS.json and issue #3.
+ * Framing (MSP + 4-way), eeprom codec, mcu/hex handling, the link layer with
+ * its injectable clock, and Am32Session on top. Design and audit trail: issue #3.
  *
  * Everything here is importable both as a whole (`am32-core`) and by module
  * (`am32-core/framing/msp`). Vue components must use the session layer only --
- * block 5 adds the ESLint rule that enforces it.
+ * an ESLint `no-restricted-imports` rule enforces it.
  */
 
 export {

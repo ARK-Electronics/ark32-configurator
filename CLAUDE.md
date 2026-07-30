@@ -16,6 +16,11 @@ CLI). Before touching anything under `packages/`, `src/communication/`,
   exit 0 before any block is called done.
 - `yarn test` / `yarn test:watch` — vitest over `packages/**`.
 - `yarn typecheck:core` — the DOM/Node exclusion check (see below).
+- `yarn build:cli` — bundle the `ark32` CLI into `packages/am32-cli/dist/`. Run
+  `yarn install` once afterwards to get `node_modules/.bin/ark32`. Not part of
+  `yarn verify`; `bash scripts/assert-cli-sim.sh` is the gate that covers it.
+- `ark32 --sim <command>` — drive the whole protocol stack with no hardware. The
+  fastest way to reproduce a protocol failure or see a session's log lines.
 - Yarn 4 only. Never `npm install`. Node v20.20.2 (`.nvmrc`).
 
 ## Layout
@@ -28,11 +33,20 @@ CLI). Before touching anything under `packages/`, `src/communication/`,
   to that tsconfig, the code belongs in a transport package instead.
 - `components/`, `pages/`, `stores/` — Nuxt app. These are becoming a thin
   client of the core; they must not reach below the session layer.
+- `packages/am32-web`, `packages/am32-node`, `packages/am32-sim` — the three
+  `Transport` implementations: Web Serial, node-serialport, and the simulated FC
+  and ESCs. Peers, not variants; a transport moves bytes and nothing else.
+- `packages/am32-cli/` — the `ark32` binary. A client of the core exactly as the
+  Nuxt app is. No protocol code lives here.
 - `src/`, `utils/` — legacy protocol code being migrated into the core.
 - `server/` — Nitro API (firmware catalog, sponsors, admin).
 
 Nuxt consumes `am32-core` straight from TypeScript source via an `alias` +
 `build.transpile` in `nuxt.config.ts`. There is no build step for the core.
+`am32-node`, `am32-sim` and `am32-cli` are deliberately **not** aliased and
+nothing in the app imports them — `serialport` would not survive a browser bundle
+and the simulator must never reach one. The CLI is the one thing with a build
+step, because it is published and shipped as binaries.
 
 ## Git
 

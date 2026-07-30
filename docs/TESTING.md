@@ -1,17 +1,22 @@
 # Testing the ARK32 configurator
 
-Three layers, in increasing order of cost and decreasing order of how often they
+Four layers, in increasing order of cost and decreasing order of how often they
 run.
 
 | Layer | Command | Runs on |
 |---|---|---|
 | Unit + property | `yarn test` | every push, every block |
 | Integration against the simulator | `yarn test` (same suite) | every push, every block |
+| The built `ark32` binary against the simulator | `bash scripts/assert-cli-sim.sh` | every push |
 | Hardware checkpoints | by hand, with a board plugged in | twice in the whole overhaul |
 
 `yarn verify` — `lint && typecheck:core && typecheck:app && test` — is the gate.
 It must exit 0 before any overhaul block is called done, and CI runs it on push
 and PR.
+
+`assert-cli-sim.sh` is deliberately *not* part of `yarn verify`: it needs a build
+step, and every block so far has declined to change what `yarn verify` means. CI
+runs it as its own step, after `yarn build:cli`.
 
 ## Unit and property tests
 
@@ -87,6 +92,44 @@ implementation and watching a specific test go red — see the mutation tables i
 a new guard; block 3 found one that was unreachable and block 4 removed another
 for the same reason.
 
+## The `ark32` CLI (block 7)
+
+`ark32 --sim` runs any command against the same simulated rig the test suite uses
+— `createSimHarness`, one object graph, no second protocol stack. It is the third
+layer in the table above, and it is useful three ways:
+
+```sh
+yarn build:cli                                  # dist/ark32.mjs, then yarn install once
+ark32 --sim enumerate --escs 4                  # a smoke test CI runs on every push
+ark32 --sim --fault esc3=unresponsive --json enumerate   # reproduce a reported failure
+ark32 --sim --fc betaflight --escs 2 -v info    # watch the session's own log lines
+```
+
+`--fault` reaches every knob in the table above; `ark32 --help` lists the specs.
+`escN` is 1-based, exactly as `--esc` is.
+
+**`--sim` runs on a virtual clock, not the system one.** A simulated run would
+otherwise take real time for every delay the protocol contains — ArduPilot's 4 s
+MAVLink window, the 2 s passthrough settle, a page-write timeout per chunk of a
+flash — which is minutes for a `flash` and useless as a CI gate. On a virtual
+clock the same run is milliseconds and deterministic. The cost, stated plainly:
+**`--sim` proves protocol logic, session ordering and every timeout *derivation*.
+It cannot tell you a real USB link is fast enough.** That is what the hardware
+checkpoints are for.
+
+`scripts/assert-cli-sim.sh` is what a block runs. It covers what `yarn test`
+cannot: `yarn test` drives `run()` in-process, and between that and `ark32` sit
+the esbuild bundle, the shebang, the `bin` link and `main.ts`'s argv plumbing — a
+bundling mistake breaks the binary and leaves the suite green. It also pins the
+whole section 6 exit-code table and the rule that `--json` puts exactly one object
+on stdout even under `-v`.
+
+One division of labour worth knowing before adding to it: the gate checks *exit
+codes*, so it cannot tell an unknown flag from an unexpected positional argument —
+both are exit 3. The parser's reasoning is `packages/am32-cli/src/args.test.ts`'s
+job, and it asserts on the messages. A mutation that removed the unknown-flag
+guard left the gate green and that unit test red.
+
 ## Hardware checkpoints
 
 The simulator has never been checked against real silicon, and that is by design
@@ -95,6 +138,26 @@ is caught here, at two fixed points. Neither is optional — the UI is rewritten
 wholesale in block 5 and nothing else in the plan touches real hardware.
 
 Record what you saw, in this file, under the checkpoint.
+
+**Since block 7, the checkpoints can be run headlessly as well as through the UI**,
+and doing both is worth the extra minutes because they exercise different client
+code over identical protocol code:
+
+```sh
+ark32 ports                                     # find the FC
+ark32 -p /dev/ttyACM0 -v enumerate              # checkpoint 1
+ark32 -p /dev/ttyACM0 read --esc all -o before  # checkpoint 2, step 1
+ark32 -p /dev/ttyACM0 set --esc 1 TIMING_ADVANCE=16
+#   power-cycle the board here
+ark32 -p /dev/ttyACM0 read --esc all -o after
+cmp before/esc-1.bin after/esc-1.bin            # only byte 0x17 may differ
+ark32 -p /dev/ttyACM0 -v flash --esc 1 --hex AM32_ARK_4IN1_F051_3.0-ark.hex
+```
+
+`cmp` on the two dumps is a stronger form of the CAN-block check than reading the
+UI: it names *every* byte that moved, so a field nobody thought to look at cannot
+slip through. Note byte 2 will differ if the bootloader version changed, and
+nothing else should.
 
 ## What is *not* covered by `yarn verify`
 
@@ -116,7 +179,19 @@ Two consequences worth planning around:
 
 ### Checkpoint 1 — after block 4: connect and enumerate
 
-**Status: outstanding.** Blocks 1a, 1b, 2, 3, 4 and 5 have all landed without it.
+**Status: outstanding.** Blocks 1a, 1b, 2, 3, 4, 5, 6 and 7 have all landed
+without it.
+
+Block 7 adds one thing to this checkpoint that nothing else can cover: **`ark32`
+is the first code in the repo to open a serial port through
+`am32-node`** — a transport that has never moved a byte over real silicon. Its one
+behavioural difference from the Web Serial transport is that `write` also drains
+(`tcdrain(2)`), so "the write resolved" means the bytes left the UART rather than
+that they are queued. If a hardware run sees timeouts the browser does not, that
+is the first thing to doubt: it is one `await` in
+`packages/am32-node/src/node-serial-transport.ts` and its cost is real serial time.
+`ark32 -v` prints every session log line, so compare it against the browser's log
+panel on the same board.
 
 Rig: an ARK FPV with 4 ESCs, and separately a Betaflight board. Close Mission
 Planner and QGroundControl first — they hold the MAVLink port.
@@ -169,7 +244,23 @@ anything ran on hardware:
 
 ### Checkpoint 2 — after block 6: settings round-trip and flash
 
-**Status: outstanding.** Block 6 has landed; nothing was plugged in.
+**Status: outstanding.** Blocks 6 and 7 have landed; nothing was plugged in.
+
+Block 7 adds one step and one warning.
+
+**The step:** run the round-trip through `ark32` as well as through the UI, using
+`cmp` on two `read --esc all -o DIR` dumps as described under "Hardware
+checkpoints" above. That is a stronger check than reading the CAN fields off the
+screen, because it names every byte that moved.
+
+**The warning:** `ark32 write --esc all -i FILE` preserves six fields the file
+carries — the boot byte, the layout revision, the bootloader version, the two
+firmware-version bytes and the CAN block — where the *web app's* "apply config
+file" preserves only the CAN block. So a round-trip through the CLI and a
+round-trip through the UI are **not** byte-identical if the file's identity bytes
+differ from the ESC's. The CLI's behaviour is the safer one and the reasoning is in
+`packages/am32-cli/src/commands/settings.ts`; the divergence is recorded in
+`docs/plans/overhaul/notes/block-7.md` as an app-side hazard worth closing.
 
 What block 6 changed, so this checkpoint knows what it is looking at:
 

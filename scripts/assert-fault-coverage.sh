@@ -21,6 +21,13 @@ KNOBS=(
     dropBytes           # E,G -- framing must resynchronise
     injectGarbage       # E,G -- drain must clear stale RX
     canBlock            # A  -- settings round-trip must preserve 176-183
+    # Not in the plan's section 3 table. Added in block 6, which needed a way to
+    # reach the one failure the bootloader's own memcmp verify cannot report -- a
+    # write the flight controller reported as OK that never took effect
+    # (AP_BLHeli.cpp:928-932). Without it, read-back verification has no test that
+    # fails when it is removed, and block 3's rule is that a knob nothing exercises
+    # is a knob that has stopped working.
+    silentWriteFailure  # A,C -- a write must be proven, not assumed
 )
 
 # The test-side check looks for a suite *named after* the knob -- the plan's

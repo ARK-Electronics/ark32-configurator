@@ -71,6 +71,19 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@ark/am32-cli@workspace:packages/am32-cli":
+  version: 0.0.0-use.local
+  resolution: "@ark/am32-cli@workspace:packages/am32-cli"
+  dependencies:
+    am32-core: "workspace:*"
+    am32-node: "workspace:*"
+    am32-sim: "workspace:*"
+    serialport: "npm:^13.0.0"
+  bin:
+    ark32: ./dist/ark32.mjs
+  languageName: unknown
+  linkType: soft
+
 "@babel/code-frame@npm:^7.0.0, @babel/code-frame@npm:^7.27.1, @babel/code-frame@npm:^7.28.6, @babel/code-frame@npm:^7.29.0":
   version: 7.29.0
   resolution: "@babel/code-frame@npm:7.29.0"
@@ -6260,7 +6273,7 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"am32-node@workspace:packages/am32-node":
+"am32-node@workspace:*, am32-node@workspace:packages/am32-node":
   version: 0.0.0-use.local
   resolution: "am32-node@workspace:packages/am32-node"
   dependencies:
@@ -6269,7 +6282,7 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"am32-sim@workspace:packages/am32-sim":
+"am32-sim@workspace:*, am32-sim@workspace:packages/am32-sim":
   version: 0.0.0-use.local
   resolution: "am32-sim@workspace:packages/am32-sim"
   dependencies:
@@ -6435,6 +6448,7 @@ __metadata:
     dayjs-nuxt: "npm:^2.1.9"
     dexie: "npm:^4.2.1"
     dotenv: "npm:^16.4.5"
+    esbuild: "npm:^0.28.1"
     eslint: "npm:^8.56.0"
     fast-check: "npm:^4"
     ioredis: "npm:^5.4.1"
@@ -6444,6 +6458,7 @@ __metadata:
     nuxt-svgo: "npm:^4.0.3"
     octokit: "npm:^3.1.2"
     pinia: "npm:^2.1.7"
+    postject: "npm:^1.0.0-alpha.6"
     prisma: "npm:^7.5.0"
     semver: "npm:^7.6.0"
     tsx: "npm:^4.21.0"
@@ -7528,6 +7543,13 @@ __metadata:
   version: 7.2.0
   resolution: "commander@npm:7.2.0"
   checksum: 10c0/8d690ff13b0356df7e0ebbe6c59b4712f754f4b724d4f473d3cc5b3fdcf978e3a5dc3078717858a2ceb50b0f84d0660a7f22a96cdc50fb877d0c9bb31593d23a
+  languageName: node
+  linkType: hard
+
+"commander@npm:^9.4.0":
+  version: 9.5.0
+  resolution: "commander@npm:9.5.0"
+  checksum: 10c0/5f7784fbda2aaec39e89eb46f06a999e00224b3763dc65976e05929ec486e174fe9aac2655f03ba6a5e83875bd173be5283dc19309b7c65954701c02025b3c1d
   languageName: node
   linkType: hard
 
@@ -8674,7 +8696,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"esbuild@npm:^0.27.0 || ^0.28.0":
+"esbuild@npm:^0.27.0 || ^0.28.0, esbuild@npm:^0.28.1":
   version: 0.28.1
   resolution: "esbuild@npm:0.28.1"
   dependencies:
@@ -14738,6 +14760,17 @@ __metadata:
   version: 3.4.7
   resolution: "postgres@npm:3.4.7"
   checksum: 10c0/b2e61b1064d38e7e1df8291f6d5a7e11f892a3240e00cf2b5e5542bf9abbfe97f3963164aeb56b42c1ab6b8aae3454c57f5bbc1791df0769375542740a7cde72
+  languageName: node
+  linkType: hard
+
+"postject@npm:^1.0.0-alpha.6":
+  version: 1.0.0-alpha.6
+  resolution: "postject@npm:1.0.0-alpha.6"
+  dependencies:
+    commander: "npm:^9.4.0"
+  bin:
+    postject: dist/cli.js
+  checksum: 10c0/7d5c5ffdb63190d48cc4b4b617ef2fa144f2bfd5f035231af08a8d7465298ed2a08ee4b354df198b4c96b32d3d873e562b6d23caacd80eb0ec722d81381e4a3e
   languageName: node
   linkType: hard
 

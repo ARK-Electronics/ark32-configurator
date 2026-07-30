@@ -209,10 +209,44 @@ export class SimEsc {
      */
     shortRead: boolean | number = false;
 
+    /**
+     * The next write is accepted with `ACK_OK` and changes nothing in flash.
+     *
+     * `true` for every write, a number for the next N. The counted form is what
+     * makes "the retry recovered" an exact assertion rather than a timing race,
+     * the same shape {@link corruptCrc} uses.
+     *
+     * **This is the one host-visible shape the bootloader's own verify cannot
+     * produce, which is why it needs a knob.** `save_flash_nolib` ends in a
+     * `memcmp` and returns false on a mismatch (`EE:61-62`), which the bootloader
+     * reports as a bad ACK (`BL:527-528`) -- so a *programming* failure is loud.
+     * What is silent is the flight controller: `BL_WriteA` leaks `ACK_OK` when its
+     * final `BL_GetACK` times out (`AP_BLHeli.cpp:928-932`), so a write the ESC
+     * never confirmed -- or never received -- is reported to the host as a
+     * success. That is the gap read-back verification exists to close, and this
+     * knob is the only way to reach it from a test.
+     */
+    silentWriteFailure: boolean | number = false;
+
     /** Set {@link slowMs}. Spelled as a method because the plan's knob is `slowBy(ms)`. */
     slowBy (ms: number): this {
         this.slowMs = Math.max(0, ms);
         return this;
+    }
+
+    /**
+     * True if this write should be swallowed, consuming one of a counted budget.
+     * Called by {@link programFlash}; not part of the knob API.
+     */
+    private takeSilentWriteFailure (): boolean {
+        if (this.silentWriteFailure === true) {
+            return true;
+        }
+        if (typeof this.silentWriteFailure === 'number' && this.silentWriteFailure > 0) {
+            this.silentWriteFailure -= 1;
+            return true;
+        }
+        return false;
     }
 
     /**
@@ -439,6 +473,13 @@ export class SimEsc {
         // even-address/even-length requirement in `save_flash_nolib` (EE:20-22).
         if (this.address < FIRMWARE_START || this.address % 2 !== 0 || this.buffer.length % 2 !== 0) {
             return this.refused(duration);
+        }
+
+        // The flight controller's leaked `ACK_OK` (see `silentWriteFailure`):
+        // accepted, and nothing reached flash. Counted as a write, because the
+        // command did happen -- what did not happen is the programming.
+        if (this.takeSilentWriteFailure()) {
+            return this.ok(duration);
         }
 
         const payload = this.stampBootloaderVersion(this.buffer);

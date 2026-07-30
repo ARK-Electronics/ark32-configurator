@@ -20,10 +20,7 @@
     "bin": {
         "ark32": "./dist/ark32.mjs"
     },
-    "exports": {
-        ".": "./src/index.ts",
-        "./*": "./src/*.ts"
-    },
+    "//exports": "Deliberately absent. This is a bin-only package: `files` ships dist/ark32.mjs and nothing else, so an `exports` map pointing at ./src/*.ts would resolve to files the tarball does not contain. Nothing imports am32-cli by package name -- its own modules use relative paths and no other workspace depends on it.",
     "files": [
         "dist/ark32.mjs"
     ],

@@ -115,6 +115,31 @@ describe('TimeoutPolicy: MSP', () => {
 });
 
 describe('TimeoutPolicy: other 4-way commands', () => {
+    it('absorbs an ESC that answers every command 600 ms late', () => {
+        // Block 6's done-when, as a property of the table rather than only as an
+        // integration test: an ESC 600 ms late on every 4-way command must not fail
+        // a flash, so every exchange a flash makes has to have room for 600 ms on
+        // top of the FC's own budget. The small read is the one that used to fail --
+        // its derivation is ~300 ms, so only the floor covers it.
+        const slowMs = 600;
+        for (const variant of ['ardupilot', 'betaflight', 'generic'] as const) {
+            const policy = new TimeoutPolicy({ variant });
+            const wire = wireMs(256, SOFT_SERIAL_BAUD);
+            for (const [command, bytes] of [
+                [FOUR_WAY_COMMANDS.cmd_DeviceInitFlash, 0],
+                [FOUR_WAY_COMMANDS.cmd_DeviceRead, 32],
+                [FOUR_WAY_COMMANDS.cmd_DeviceRead, 192],
+                [FOUR_WAY_COMMANDS.cmd_DeviceRead, 256],
+                [FOUR_WAY_COMMANDS.cmd_DeviceWrite, 192],
+                [FOUR_WAY_COMMANDS.cmd_DeviceWrite, 256],
+                [FOUR_WAY_COMMANDS.cmd_DeviceReset, 1]
+            ] as const) {
+                expect(policy.forFourWay(command, bytes))
+                    .toBeGreaterThan(slowMs + wire);
+            }
+        }
+    });
+
     it('covers Betaflight cmd_DeviceReset busy-waiting 300 ms before it answers', () => {
         // serial_4way.c:608: while (millis() - m < 300);
         expect(generic.forFourWay(FOUR_WAY_COMMANDS.cmd_DeviceReset, 1)).toBeGreaterThan(300);

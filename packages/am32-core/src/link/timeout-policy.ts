@@ -60,8 +60,37 @@ const BITS_PER_BYTE = 10;
  * Host-side slack on top of the FC's own budget: USB scheduling, the browser
  * task queue and the FC's main loop. Deliberately one named number rather than
  * a sprinkling of round-ups, so hardware bring-up has exactly one knob to turn.
+ *
+ * **Raised from 250 to 700 in block 6.** The plan's done-when for that block is "a
+ * flash with `esc[n].slowBy(600)` still succeeds" -- an ESC that answers every
+ * 4-way command 600 ms late -- and `slowBy` is charged *outside* the ESC's own
+ * operations precisely so that it models latency in the path rather than
+ * ESC-internal time (`am32-sim/src/esc.ts`, block 3's design decision 1). Latency
+ * in the path is exactly what this constant is the allowance for, so at 250 the
+ * allowance was smaller than the tolerance the plan requires. 600 + 100 ms for the
+ * exchange itself.
+ *
+ * Raising the margin rather than `TIMEOUT_FLOORS.fourWayRead` is the deliberate
+ * part. A floor big enough to cover 600 ms (900+) exceeds the derived budget for
+ * every read up to ~200 bytes, including the 192-byte settings read -- so it would
+ * erase the per-variant keying exactly where the app does most of its reading, and
+ * two of this file's own tests failed to prove it. The margin is added to each
+ * derivation, so Betaflight keeps its 2 ms-per-byte read budget against
+ * ArduPilot's 1 ms.
+ *
+ * It is also the knob block 2's handoff note nominated for this, and it moves back
+ * toward what real hardware is known to work with: the pre-overhaul app used a flat
+ * 1500 ms for every 4-way read, and block 2 -- the one place in the plan where a
+ * timeout moved *down* -- flagged that as its single riskiest change, with no
+ * hardware checkpoint run since. A 192-byte read is now 1024 ms (ArduPilot) rather
+ * than 574.
+ *
+ * What it costs: nothing on a healthy link, where the timer is cancelled by the
+ * reply. A dead-but-connected channel takes ~45% longer to be declared dead across
+ * its ten attempts. A channel that is simply absent is unaffected -- it fails
+ * `cmd_DeviceInitFlash` on the 1000 ms interface floor.
  */
-export const HOST_MARGIN_MS = 250;
+export const HOST_MARGIN_MS = 700;
 
 /** Bytes the FC adds to a soft-serial read reply: CRC16 (2) + ACK (1). */
 const BL_READ_OVERHEAD_BYTES = 3;

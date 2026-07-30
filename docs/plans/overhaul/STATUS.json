@@ -109,13 +109,14 @@
         {
             "id": "7",
             "title": "Headless CLI",
-            "status": "in-progress",
+            "status": "done",
             "dependsOn": [
                 "6"
             ],
             "doneWhenCmd": "test -d packages/am32-cli && test -d packages/am32-node",
             "doneWhen": "yarn verify, plus `ark32 --sim enumerate --escs 4` and `ark32 --sim write --esc all -i fixture.bin` succeeding with no hardware",
-            "notes": "packages/am32-node + packages/am32-cli including --sim. Packaging per issue #3 section 6."
+            "notes": "packages/am32-node + packages/am32-cli including --sim. Packaging per issue #3 section 6.",
+            "handoffNote": "docs/plans/overhaul/notes/block-7.md"
         },
         {
             "id": "8",

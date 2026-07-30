@@ -14,7 +14,7 @@ Landed on `master` on top of `dd23faf`:
 | `7b4921b` | `fix(cli): drop the exports map from a bin-only package` |
 | `c17af31` | `test(cli): pin the two flags whose only effect is a duration` |
 | `634e767` | `fix(cli): act on the diff review's findings` |
-| `8457ce2`, `a83fa39`, `1baffa2` | this note, and its two updates after the review |
+| `8457ce2`, `a83fa39`, `848a8cc` | this note, and its two updates after the review |
 | `6277b6d` | `chore(plan): commit the driver's in-progress marker for block 7` |
 
 **Nothing outside `packages/`, `scripts/`, `.github/workflows/`, `docs/` and the two

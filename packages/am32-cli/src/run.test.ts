@@ -286,6 +286,31 @@ describe('ark32 enumerate', () => {
         expect(result.stderr).toContain('reported 0 ESCs');
     });
 
+    it('and so does every other per-channel command, not just enumerate', async () => {
+        // The check lives in `withRig` rather than in each command for this reason:
+        // with `--esc all` there is nothing to walk, so `set`, `write`, `flash` and
+        // `reset` would each exit 0 for having done nothing at all.
+        for (const argv of [
+            ['--sim', '--escs', '0', 'set', '--esc', 'all', 'TIMING_ADVANCE=16'],
+            ['--sim', '--escs', '0', 'defaults', '--esc', 'all'],
+            ['--sim', '--escs', '0', 'reset', '--esc', 'all'],
+            ['--sim', '--escs', '0', 'get', '--esc', 'all'],
+            ['--sim', '--escs', '0', 'read', '--esc', 'all', '-o', 'out']
+        ]) {
+            const result = await cli(argv);
+            expect(result.code, argv.join(' ')).toBe(EXIT_CONNECT);
+            expect(result.stdout, argv.join(' ')).toBe('');
+        }
+    });
+
+    it('but `info` still works on a board with no motor outputs', async () => {
+        // `info` does not need passthrough, so a zero-channel FC is a perfectly good
+        // answer to "what flight controller is this".
+        const result = await cli(['--sim', '--escs', '0', 'info']);
+        expect(result.code).toBe(EXIT_OK);
+        expect(result.stdout).toContain('ARDU');
+    });
+
     it('works on the Betaflight profile too', async () => {
         const result = await cli(['--sim', '--fc', 'betaflight', '--escs', '2', '--json', 'enumerate']);
         expect(result.code).toBe(EXIT_OK);

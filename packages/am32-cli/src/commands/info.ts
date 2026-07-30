@@ -9,7 +9,6 @@
  */
 
 import type { Am32Session, FcInfo } from 'am32-core/session';
-import { SessionError } from 'am32-core/errors';
 import { EXIT_OK, exitCodeForTargets } from '../exit';
 import type { CommandOutcome } from '../report';
 
@@ -61,29 +60,16 @@ export function commandInfo (fc: FcInfo): CommandOutcome {
 /**
  * `ark32 enumerate`.
  *
- * A flight controller that entered passthrough and reported **zero** channels is
- * reported as a connect-class failure (exit 2) rather than as an empty success.
- * It is not a partial result -- no ESC failed, because none was addressable -- and
- * every other command would be equally impossible against this FC, which is what
- * exit 2 tells a script. Betaflight reaches this state on a board with no
- * configured motor outputs: `esc4wayProcess` is installed unconditionally
- * (`msp.c:328-333` is not guarded by the count), so the FC really does enter
- * passthrough with nothing behind it.
+ * A flight controller that reported **zero** channels never reaches here: `run.ts`
+ * rejects that in `withRig`, right after `enterPassthrough`, so that every
+ * per-channel command reports it identically rather than each one deciding for
+ * itself. See the comment there for why it is exit 2 and not an empty success.
  */
 export function commandEnumerate (
     fc: FcInfo,
     escCount: number,
     results: Awaited<ReturnType<Am32Session['enumerate']>>
 ): CommandOutcome {
-    if (escCount === 0) {
-        throw new SessionError(
-            'passthrough',
-            'the flight controller entered 4-way passthrough and reported 0 ESCs, ' +
-            'so there is nothing to address. On Betaflight this is a board with no ' +
-            'configured motor outputs.'
-        );
-    }
-
     const escs = results.map(result => ({
         esc: result.target + 1,
         target: result.target,

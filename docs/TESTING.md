@@ -69,6 +69,17 @@ Every knob maps to a bug the audit in issue #3 found, so the fixes stay fixed.
 | `fc.blockingFourWay` | Betaflight passthrough must not expect MSP (**H**) |
 | `link.dropBytes`, `link.injectGarbage` | framing must resynchronise; drain must clear stale RX (**E**, **G**) |
 | `esc[n].canBlock = [...]` | a settings round-trip must preserve bytes 176–183 exactly (**A**) |
+| `esc[n].silentWriteFailure` | a write must be proven by a read-back, not assumed from an ACK (**A**, **C**) |
+| `esc[n].failingFlashCell` | a chunk the bootloader rejected must be repaired at the page base (**C**) |
+
+The last two are block 6's and are not in the plan's section 3 table. They exist
+because the two ways a write can fail are not the same shape:
+`silentWriteFailure` is accepted-and-dropped, which nothing but a read-back finds
+(ArduPilot's `BL_WriteA` leaks `ACK_OK` when its final `BL_GetACK` times out,
+`AP_BLHeli.cpp:928-932`); `failingFlashCell` is a cell that will not hold its
+charge, which the bootloader's *own* `memcmp` rejects — leaving the page partly
+programmed with bits that cannot be set back, so only a page-base write, which
+erases first, can repair it.
 
 The gate is a *presence* check. What proves a knob works is mutating its
 implementation and watching a specific test go red — see the mutation tables in
@@ -119,11 +130,11 @@ What to watch for, accumulated from the notes of every block since the last time
 anything ran on hardware:
 
 - **The 4-way read timeout dropped from 1500 ms to 769 ms** (192-byte settings
-  read, generic variant) in block 2. That is the one number in the whole overhaul
-  that moved *down*, and PR #1's 1500 ms was a guess rather than a measurement.
-  If reads start timing out, raise `HOST_MARGIN_MS` in
-  `packages/am32-core/src/link/timeout-policy.ts` or construct the policy with
-  `{ scale: 2 }` — do **not** add a literal at a call site.
+  read, generic variant) in block 2, and block 6 took it back up to **1219 ms** by
+  raising `HOST_MARGIN_MS` from 250 to 700. It is still below what real hardware
+  is known to work with, and it is no longer the one number in the overhaul that
+  moved down. If reads still time out, raise the margin further or construct the
+  policy with `{ scale: 2 }` — do **not** add a literal at a call site.
 - **The flash page write went from 200 ms to ~1000 ms** (block 2, audit **C**).
   Flashing should be more reliable, and roughly 12 s faster from the drain change
   alone.
@@ -154,11 +165,39 @@ anything ran on hardware:
 - **A settings write re-reads the ESC first** (block 5). `writeSettings` builds
   its 192 bytes from a fresh read rather than from the buffer the UI is holding,
   so a save costs one extra read per ESC and cannot revert a byte another client
-  moved. Still unverified after the write — block 6 adds that.
+  moved. Block 6 added a second read *after* the write, to verify it.
 
 ### Checkpoint 2 — after block 6: settings round-trip and flash
 
-**Status: outstanding** (block 6 has not run).
+**Status: outstanding.** Block 6 has landed; nothing was plugged in.
+
+What block 6 changed, so this checkpoint knows what it is looking at:
+
+- **Every write is read back and compared.** A save is now three exchanges per
+  ESC (read the base, write, read it back) and a flash is two per 256-byte chunk,
+  so **a flash takes roughly twice as long as it did**. That is expected. If a
+  save or a flash fails with "did not verify", the message names the byte and the
+  address — write it down, because that is the single most informative failure
+  this checkpoint can produce.
+- **Only EEPROM byte 2 is exempt from the compare**, because the bootloader
+  stamps its own version there inside every write to the page base
+  (`AM32-bootloader/bootloader/main.c:517-525`, `BOOTLOADER_VERSION` = 18 at
+  `Inc/version.h:5`). **If a real ARK bootloader stamps a different byte or a
+  different index, every save on real hardware fails and this is where it shows
+  up.** That is the highest-risk assumption in the block.
+- **A settings save now reports the ESC's byte 2, not the host's.** The result
+  carries the read-back image, so the bootloader version shown in `EscView`
+  after a save is the real one.
+- **A page the ESC rejects is re-written from its page base**, up to four attempts
+  (AM32's own `BL_MAX_PAGE_ATTEMPTS`). Watch the log panel during a flash: a
+  "re-writing it from its base" warning followed by success is the recovery
+  working, and is worth knowing about on real silicon.
+- **Apply defaults no longer writes the boot byte, the layout revision, the
+  bootloader version, the two firmware-version bytes or the CAN block.** After
+  applying defaults, `EscView` must still show the ESC's own firmware version and
+  its CAN node ID. The old code wrote the default file's 1.35 over the version.
+- **Apply defaults works with no firmware catalog.** With `MINIO_URL` unset the
+  app falls back to AM32's own built-in defaults and toasts that it did so.
 
 Rig: an ARK FPV with 4 ESCs and a populated CAN block.
 
@@ -166,10 +205,10 @@ Rig: an ARK FPV with 4 ESCs and a populated CAN block.
    Bytes 176–183 must be unchanged and the edited field must have stuck. That is
    audit item **A** closed on real hardware.
 2. Flash a local `.hex`. Confirm it completes and the ESC boots.
+3. Apply defaults to one ESC. Its CAN node ID and its firmware version must be
+   unchanged afterwards; its tunables must be back at AM32's defaults.
 
-Block 5 moved the write and the flash into `Am32Session`, so both are live as of
-that block even though block 6 owns their verification. Two extra things to watch
-while doing step 2:
+Two extra things to watch while doing step 2:
 
 - **The flash stops at the EEPROM page**, not at the end of flash. The
   application region is 0x1000–0x7C00 on the F051 and its last 32 bytes are the
@@ -188,7 +227,14 @@ them:
 1. The per-operation **durations** in `packages/am32-sim/src/esc.ts` are invented
    within the firmware's budgets rather than measured.
 2. The bootloader-version stamp on EEPROM byte 2 assumes `BOOTLOADER_VERSION` is
-   18; a different ARK build stamps a different number.
+   18; a different ARK build stamps a different number. **This got more load-bearing
+   in block 6:** the *number* still does not matter (byte 2 is exempted from the
+   compare whatever it holds), but the *index* and the *condition* now do. Block 6
+   re-verified both against the bootloader — `payLoadBuffer[2]` is patched only when
+   the write address is exactly `EEPROM_START_ADD` and the payload is longer than two
+   bytes, and it is the only substitution anywhere on the write path
+   (`bootloader/main.c:517-525`, `:454-457`). If an ARK bootloader ever patches a
+   second byte, every settings save fails to verify.
 3. ~~`FIRMWARE_START` may be `0x4000` on a `DRONECAN_SUPPORT` build.~~ **Settled
    in block 5: `0x1000` is correct for ARK's shipped F051 firmware.** The
    bootloader Makefile only defines `DRONECAN_SUPPORT=1` for `_CAN`-suffixed

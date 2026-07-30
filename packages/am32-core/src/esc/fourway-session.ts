@@ -21,6 +21,7 @@
  *     timeout instead of being handed up as data.
  */
 
+import { countDifferences, firstDifference } from '../bytes';
 import { SessionError, causedBySessionError, describeError } from '../errors';
 import type { LogLevel } from '../events';
 import {
@@ -245,6 +246,56 @@ export class FourWaySession {
             address,
             payloadBytes: data.length
         });
+    }
+
+    /**
+     * Read `expected.length` bytes back from `address` and compare them.
+     *
+     * Returns what the ESC actually holds, so the caller can keep it rather than
+     * keep what it sent. Throws `SessionError('esc-verify')` on a mismatch, naming
+     * the first differing byte -- a hardware checkpoint that only learns "the write
+     * did not verify" has nothing to go on.
+     *
+     * **Why this exists when the bootloader already verifies its own writes.**
+     * `save_flash_nolib` ends in a `memcmp` and returns false on a mismatch
+     * (`Mcu/f051/Src/eeprom.c:61-62`), which the bootloader reports as a bad ACK
+     * (`bootloader/main.c:527-528`), so a *programming* failure is loud. The gap is
+     * in the flight controller: `BL_WriteA` leaks `ACK_OK` when its final
+     * `BL_GetACK` times out (`AP_BLHeli.cpp:928-932`), so a write the ESC never
+     * confirmed -- or never received, since the FC gives up before
+     * `CMD_PROG_FLASH` on some paths -- reaches the host as a success.
+     *
+     * `exempt` is for bytes the ESC legitimately changes. There is exactly one:
+     * see {@link BOOTLOADER_STAMPED_OFFSET}.
+     *
+     * Deliberately **not** a `validate` on the write's own exchange, which is where
+     * block 2 put every other check of this kind. A write's reply carries no
+     * payload, so there is nothing in it to compare -- verification needs a second
+     * exchange, and `validate` cannot start one (it runs inside the link's mutex).
+     * The retry therefore has to live above the link. See
+     * `Am32Session.writeFirmware` for the page-granularity that goes with it.
+     */
+    async verifyRange (
+        address: number,
+        expected: Uint8Array,
+        options: { exempt?: ReadonlySet<number>, what?: string } = {}
+    ): Promise<Uint8Array> {
+        const actual = await this.readAddress(address, expected.length);
+        const diff = firstDifference(expected, actual, options.exempt);
+
+        if (diff !== null) {
+            const differing = countDifferences(expected, actual, options.exempt);
+            throw new SessionError(
+                'esc-verify',
+                `${options.what ?? 'the write'} did not verify: byte ${diff} at ` +
+                `0x${(address + diff).toString(16).toUpperCase()} reads ` +
+                `0x${(actual[diff] ?? 0).toString(16).toUpperCase()}, wrote ` +
+                `0x${(expected[diff] ?? 0).toString(16).toUpperCase()} ` +
+                `(${differing} of ${expected.length} byte(s) differ)`
+            );
+        }
+
+        return actual;
     }
 
     /** `cmd_DeviceReset` -- run the application again on `target`. */

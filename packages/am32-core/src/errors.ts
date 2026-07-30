@@ -26,6 +26,18 @@ export type SessionErrorReason =
     /** Any other 4-way command answered with a non-OK ACK. */
     | 'esc-command'
     /**
+     * A write was accepted and did not read back.
+     *
+     * Distinct from `esc-command` because the ACK was fine: nothing on the wire
+     * reported a failure, and only the read-back found it. The bootloader's own
+     * `memcmp` (`Mcu/f051/Src/eeprom.c:61-62`) means the ESC cannot lie about a
+     * programming failure -- but ArduPilot's `BL_WriteA` leaks `ACK_OK` when its
+     * final `BL_GetACK` times out (`AP_BLHeli.cpp:928-932`), so the *flight
+     * controller* can. Block 7 should map this to its own exit code: the ESC is
+     * healthy, the write is not.
+     */
+    | 'esc-verify'
+    /**
      * The firmware image the caller handed us is unusable: not Intel HEX, or
      * built for a different board than the ESC in front of us.
      *

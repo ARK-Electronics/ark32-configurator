@@ -39,8 +39,14 @@
  * with its own version) **and `applyDefaults`.**
  */
 
+import { bytesEqual } from './bytes';
 import { VirtualClock, createSystemClock, type Clock } from './clock';
 import { decodeSettings, encodeSettings } from './eeprom/codec';
+import {
+    DEFAULTS_PRESERVED_FIELDS,
+    DEFAULT_SETTINGS_IMAGE,
+    DEFAULT_STARTUP_MELODY
+} from './eeprom/defaults';
 import { EEPROM_SIZE, EepromLayout, type EscSettings } from './eeprom/layout';
 import { SessionError, causedBySessionError, describeError } from './errors';
 import {
@@ -110,17 +116,63 @@ export interface WriteSettingsResult {
      * which case nothing was put on the wire.
      */
     changed: boolean;
+    /**
+     * True when the ESC's own bytes were confirmed by a read.
+     *
+     * False only when the caller passed `{ verify: false }` *and* something was
+     * written. A `changed: false` result is `verified: true`: the fresh read the
+     * patch was encoded onto is itself the proof that the ESC holds these bytes.
+     */
+    verified: boolean;
     /** The settings as they now stand, decoded from the image below. */
     settings: EscSettings;
     /**
-     * The 192 bytes written.
+     * The 192 bytes the ESC holds.
      *
-     * Careful: this is what the host *sent*. A write to the EEPROM base has byte
-     * 2 replaced by the bootloader's own version (AM32-bootloader
-     * `main.c:517-524`), so the ESC's byte 2 may differ. Any read-back
-     * verification block 6 adds has to exempt it.
+     * With verification on this is the **read-back** image, so byte 2 carries the
+     * bootloader's real version rather than whatever the host sent -- which is what
+     * makes it safe for a client to mirror into a `settingsBuffer` and start the
+     * next write from. With `{ verify: false }` it is what the host sent, and byte
+     * 2 is then a guess (the bootloader replaces it inside every write to the
+     * EEPROM base, `AM32-bootloader/main.c:517-525`).
      */
     image: Uint8Array;
+}
+
+export interface WriteSettingsOptions {
+    /**
+     * Read the page back and compare it, byte for byte, before reporting success.
+     * Default true.
+     *
+     * The plan's `writeSettings(target, patch, opts?)` third parameter, and block
+     * 7's `--no-verify`. Turning it off saves one 192-byte exchange per ESC and
+     * gives up the only thing that catches a write the flight controller reported
+     * as OK without the ESC ever confirming it (`AP_BLHeli.cpp:928-932`).
+     */
+    verify?: boolean;
+}
+
+export interface ApplyDefaultsOptions extends WriteSettingsOptions {
+    /**
+     * The default image to apply. Defaults to AM32's own `default_settings[]`
+     * (see `eeprom/defaults.ts`), which needs no network and is what makes this
+     * usable from the CLI and from a deployment with no firmware catalog.
+     *
+     * A shorter image is fine and is the normal case: the served
+     * `/api/eeprom/<board>?version=N` files are the same 48 bytes, and every field
+     * that does not fit is simply not part of the patch.
+     */
+    image?: Uint8Array;
+    /**
+     * Layout revision to decode `image` with. Defaults to the ESC's own, read
+     * from the page this write is about to be built on.
+     *
+     * The plan sketches this as a positional `applyDefaults(target,
+     * layoutRevision)`. It is an option because the right value is the ESC's, and a
+     * caller that has to supply it can get it wrong -- the app used to clamp
+     * anything above 3 to 2 while the server clamped it to 3.
+     */
+    layoutRevision?: number;
 }
 
 export interface FlashOptions {
@@ -130,6 +182,14 @@ export interface FlashOptions {
      * `--allow-mcu-mismatch`.
      */
     allowMcuMismatch?: boolean;
+    /**
+     * Read every chunk back and compare it before moving on. Default true.
+     *
+     * It roughly doubles the wire time of a flash, and it is what turns a
+     * corrupted page from an unrecoverable failure into a retried one -- see
+     * `writeFirmware`.
+     */
+    verify?: boolean;
 }
 
 export interface Am32SessionOptions {
@@ -204,17 +264,54 @@ const FIRMWARE_NAME_PATTERN = /[A-Z0-9_]+/;
  */
 const FLASH_CHUNK_BYTES = 0x100;
 
-/** Byte-for-byte comparison. `compare()` from the app, which the core cannot import. */
-function bytesEqual (a: Uint8Array, b: Uint8Array): boolean {
-    if (a.length !== b.length) {
-        return false;
-    }
-    for (let i = 0; i < a.length; i += 1) {
-        if (a[i] !== b[i]) {
-            return false;
-        }
-    }
-    return true;
+/**
+ * The one byte a write to the EEPROM base does not read back.
+ *
+ * A `CMD_PROG_FLASH` whose address is *exactly* `EEPROM_START_ADD` and whose
+ * payload is longer than two bytes has `payLoadBuffer[2]` replaced with the
+ * bootloader's own `BOOTLOADER_VERSION` before anything reaches flash
+ * (`AM32-bootloader/bootloader/main.c:517-525`; the version is 18 at
+ * `Inc/version.h:5`). Re-verified with a subagent for this block, together with
+ * the two facts that make the exemption exactly this narrow: it is the **only**
+ * substitution anywhere on the write path, and the read path returns raw flash
+ * with no special case for the EEPROM page. So bytes 0, 1 and 3..191 must match
+ * byte for byte, and byte 2 never can.
+ *
+ * Note the condition is the address being *equal* to the base, not merely inside
+ * the page -- a mid-page write is not patched. Since a settings write must be the
+ * whole page anyway (see `writeSettingsImpl`), that distinction never bites, but
+ * it is why the exemption belongs to the settings-page write rather than to
+ * `verifyRange` in general.
+ */
+const BOOTLOADER_STAMPED_OFFSET = EepromLayout.BOOT_LOADER_REVISION.offset;
+
+const EEPROM_VERIFY_EXEMPT: ReadonlySet<number> = new Set([BOOTLOADER_STAMPED_OFFSET]);
+
+/**
+ * Write-then-verify attempts for one settings page or one firmware page.
+ *
+ * Four, which is AM32's own `BL_MAX_PAGE_ATTEMPTS`
+ * (`AM32/Src/bootloader_update.c:44`): the firmware's bootloader updater programs
+ * a 256-byte chunk, compares it, and on a mismatch restarts at the page base,
+ * giving up on the whole update after four attempts at any one page. This code
+ * does the same thing from the other side of the 4-way link, so it uses the same
+ * number rather than inventing one.
+ *
+ * These attempts sit **on top of** the link's ten per exchange. The two are not
+ * redundant: the link retries an exchange that failed, and this retries an
+ * exchange that *succeeded* and did not take effect.
+ */
+const PAGE_WRITE_ATTEMPTS = 4;
+
+/**
+ * True when a failure is a read-back mismatch rather than a broken exchange.
+ *
+ * The distinction decides whether writing again could possibly help. `Link`
+ * wraps a `validate` rejection, so the reason can be a level or two down --
+ * hence `causedBySessionError` rather than an `instanceof` check.
+ */
+function isVerifyFailure (error: unknown): boolean {
+    return causedBySessionError(error)?.reason === 'esc-verify';
 }
 
 export class Am32Session {
@@ -612,18 +709,74 @@ export class Am32Session {
      * legitimate input (the caller does not have to hold a whole image), and a
      * byte another client moved since the last read is not silently reverted.
      *
-     * ⚠️ **Not verified yet.** Block 6 owns read-back verification, and its
-     * verification must exempt byte 2 -- the bootloader force-overwrites it with
-     * its own version inside every EEPROM write (AM32-bootloader
-     * `main.c:517-524`), so a byte-for-byte compare of the whole image always
-     * fails there.
+     * **It verifies by read-back** unless the caller opts out, exempting exactly
+     * one byte: see {@link BOOTLOADER_STAMPED_OFFSET}.
      */
-    writeSettings (target: number, patch: Partial<EscSettings>): Promise<WriteSettingsResult> {
-        return this.exclusive(() => this.writeSettingsImpl(target, patch));
+    writeSettings (
+        target: number,
+        patch: Partial<EscSettings>,
+        options: WriteSettingsOptions = {}
+    ): Promise<WriteSettingsResult> {
+        return this.exclusive(() => this.writeSettingsImpl(target, () => patch, options));
     }
 
-    private writeSettingsImpl (target: number, patch: Partial<EscSettings>): Promise<WriteSettingsResult> {
+    /**
+     * Reset one channel to defaults, preserving its identity.
+     *
+     * `image` defaults to AM32's own `default_settings[]`, so this needs no
+     * network: the CLI and a deployment with no firmware catalog get the same
+     * behaviour the web app gets from `/api/eeprom/<board>`. See
+     * `eeprom/defaults.ts` for the bytes and their provenance.
+     *
+     * Six fields are **not** written even though the default image contains them
+     * -- the boot byte, the layout revision, the bootloader version, the two
+     * firmware-version bytes and the CAN block. Each one is an ESC's identity
+     * rather than a tunable, and the reasons are in
+     * {@link DEFAULTS_PRESERVED_FIELDS}. The app used to write all of them: the
+     * layout revision is the one that mattered, because setting an older ESC's
+     * revision to 3 makes the firmware's own migration skip
+     * (`AM32/Src/settings.c:23-36`).
+     */
+    applyDefaults (target: number, options: ApplyDefaultsOptions = {}): Promise<WriteSettingsResult> {
+        const image = options.image ?? DEFAULT_SETTINGS_IMAGE;
+        return this.exclusive(() => this.writeSettingsImpl(
+            target,
+            (_base, escRevision) => {
+                const revision = options.layoutRevision ?? escRevision;
+                const patch = decodeSettings(image, revision);
+                for (const field of DEFAULTS_PRESERVED_FIELDS) {
+                    delete patch[field];
+                }
+                // A 48-byte default image carries no melody, and *apply defaults*
+                // has always cleared it: `tune[0] == 0xFF` is the "no melody"
+                // marker (`AM32/Src/sounds.c:242`) and what a factory image ships.
+                // A caller who hands over a full 192-byte image with a tune in it
+                // keeps that tune.
+                patch.STARTUP_MELODY ??= [...DEFAULT_STARTUP_MELODY];
+                this.emitter.emit('log', {
+                    level: 'info',
+                    message: `ESC #${target + 1}: applying ${
+                        options.image ? `${image.length} bytes of supplied defaults` : 'AM32\'s built-in defaults'
+                    } as a layout-revision-${revision} image`
+                });
+                return patch;
+            },
+            options
+        ));
+    }
+
+    /**
+     * `patchFor` is handed the ESC's current image and its layout revision, so a
+     * caller that needs either -- `applyDefaults` needs the revision to decode its
+     * default image -- does not have to pay for a second read to get it.
+     */
+    private writeSettingsImpl (
+        target: number,
+        patchFor: (base: Uint8Array, layoutRevision: number) => Partial<EscSettings>,
+        options: WriteSettingsOptions
+    ): Promise<WriteSettingsResult> {
         this.requirePassthrough();
+        const verify = options.verify !== false;
 
         return this.labelled(target, async () => {
             const { mcu } = await this.selectTarget(target);
@@ -631,41 +784,100 @@ export class Am32Session {
 
             const base = await this.fourWay.readAddress(eepromOffset, EEPROM_SIZE);
             const layoutRevision = base[EepromLayout.LAYOUT_REVISION.offset] ?? 0;
-            const image = encodeSettings(base, patch, layoutRevision);
+            const image = encodeSettings(base, patchFor(base, layoutRevision), layoutRevision);
 
             if (bytesEqual(image, base)) {
                 this.emitter.emit('log', {
                     level: 'info',
                     message: `ESC #${target + 1}: no changed settings to write`
                 });
-                return { target, changed: false, settings: decodeSettings(base, layoutRevision), image: base };
+                return {
+                    target,
+                    changed: false,
+                    // The read this was built from is the proof.
+                    verified: true,
+                    settings: decodeSettings(base, layoutRevision),
+                    image: base
+                };
             }
 
             this.emitter.emit('progress', { phase: 'write', current: 0, total: 1, target });
-            // One `cmd_DeviceWrite` of the whole 192 bytes, at the page base, and
-            // it has to be the whole struct.
-            //
-            // **Do not "optimise" this into a partial write.** A write to the page
-            // base erases the whole page first (`Mcu/f051/Src/eeprom.c:34-44`), so a
-            // 16-byte write at `eepromOffset` succeeds with `ACK_OK` and blanks
-            // bytes 16-191 -- the startup melody and the entire CAN block. (A
-            // *mid-page* sub-range fails instead, on the bootloader's own memcmp,
-            // because flash can only clear bits. The dangerous shape is the one
-            // that looks safest.)
-            //
-            // `cmd_DeviceWriteEEprom` is not an option either: AM32 answers
-            // `CMD_PROG_EEPROM` with `brERRORCOMMAND` (AM32-bootloader
-            // `main.c:674-675`), and both host firmwares report that as an error for
-            // an ARM target -- ArduPilot's `cmd_DeviceWriteEEprom` takes the
-            // `default:` branch for `imARM_BLB` and sets `ACK_D_GENERAL_ERROR`
-            // (`AP_BLHeli.cpp:1214`; the ACK_OK-swallowing path at `:1211` is
-            // `imATM_BLB` only).
-            await this.fourWay.write(eepromOffset, image);
+            const written = await this.writeSettingsPage(
+                eepromOffset,
+                image,
+                `ESC #${target + 1}: the settings page`,
+                verify
+            );
             this.emitter.emit('progress', { phase: 'write', current: 1, total: 1, target });
-            this.emitter.emit('log', { level: 'info', message: `ESC #${target + 1}: settings written` });
+            this.emitter.emit('log', {
+                level: 'info',
+                message: `ESC #${target + 1}: settings written${verify ? ' and verified' : ' (not verified)'}`
+            });
 
-            return { target, changed: true, settings: decodeSettings(image, layoutRevision), image };
+            return {
+                target,
+                changed: true,
+                verified: verify,
+                settings: decodeSettings(written, layoutRevision),
+                image: written
+            };
         });
+    }
+
+    /**
+     * Write the whole 192-byte settings page, and prove it landed.
+     *
+     * Returns what the ESC actually holds afterwards, which differs from what was
+     * sent at byte 2 and nowhere else.
+     *
+     * **The write has to be the whole struct at the page base. Do not "optimise"
+     * it into a partial write.** A write to the page base erases the whole page
+     * first (`Mcu/f051/Src/eeprom.c:34-44`), so a 16-byte write at `eepromOffset`
+     * succeeds with `ACK_OK` and blanks bytes 16-191 -- the startup melody and the
+     * entire CAN block. (A *mid-page* sub-range fails instead, on the bootloader's
+     * own memcmp, because flash can only clear bits. The dangerous shape is the one
+     * that looks safest.)
+     *
+     * `cmd_DeviceWriteEEprom` is not an option either: AM32 answers
+     * `CMD_PROG_EEPROM` with `brERRORCOMMAND` (`main.c:674-675`), and both host
+     * firmwares report that as an error for an ARM target -- ArduPilot's
+     * `cmd_DeviceWriteEEprom` takes the `default:` branch for `imARM_BLB` and sets
+     * `ACK_D_GENERAL_ERROR` (`AP_BLHeli.cpp:1214`; the ACK_OK-swallowing path at
+     * `:1211` is `imATM_BLB` only).
+     */
+    private async writeSettingsPage (
+        eepromOffset: number,
+        image: Uint8Array,
+        what: string,
+        verify: boolean
+    ): Promise<Uint8Array> {
+        if (!verify) {
+            await this.fourWay.write(eepromOffset, image);
+            return image;
+        }
+
+        for (let attempt = 1; ; attempt += 1) {
+            await this.fourWay.write(eepromOffset, image);
+            try {
+                return await this.fourWay.verifyRange(eepromOffset, image, {
+                    exempt: EEPROM_VERIFY_EXEMPT,
+                    what
+                });
+            } catch (error) {
+                // Only a *verify* mismatch is worth writing again. A failed read is
+                // a channel that has stopped answering -- the link has already
+                // retried it ten times with a drain, and re-erasing the settings
+                // page on the off chance is the last thing to do about it.
+                if (attempt >= PAGE_WRITE_ATTEMPTS || !isVerifyFailure(error)) {
+                    throw error;
+                }
+                this.emitter.emit('log', {
+                    level: 'warn',
+                    message: `${what} did not verify; writing it again ` +
+                        `(attempt ${attempt + 1} of ${PAGE_WRITE_ATTEMPTS})`
+                });
+            }
+        }
     }
 
     /**
@@ -698,14 +910,10 @@ export class Am32Session {
      * The call site that passed 200 ms for an operation the FC budgets ~700 ms for
      * was audit item **C**.
      *
-     * Block 6 owns the verify pass (`cmd_DeviceVerify` cannot help -- AM32 answers
-     * `CMD_VERIFY_FLASH_ARM` with `brERRORCOMMAND`, so it has to be a read-back)
-     * and should decide whether a failed chunk retries from its page base, the way
-     * AM32's own bootloader updater does (`AM32/Src/bootloader_update.c:79-116`,
-     * `off = page_base` at `:112`, bounded by `BL_MAX_PAGE_ATTEMPTS` at `:44`).
-     * Re-sending the same chunk, which is what the link does today, is safe --
-     * reprogramming identical bytes into an already-erased page passes the memcmp --
-     * but it is not the firmware's own model.
+     * Every write is read back and compared (`{ verify: false }` opts out).
+     * `cmd_DeviceVerify` cannot do this -- AM32 answers `CMD_VERIFY_FLASH_ARM` with
+     * `brERRORCOMMAND` (`main.c:674-675`) -- so it is a read-back, and the retry is
+     * at page granularity for the reason in `writeFirmware`.
      */
     flash (target: number, hex: string, options: FlashOptions = {}): Promise<McuInfo> {
         return this.exclusive(() => this.flashImpl(target, hex, options));
@@ -735,12 +943,13 @@ export class Am32Session {
                 await this.checkImageMatchesEsc(target, image, mcu);
             }
 
+            const verify = options.verify !== false;
             const eepromOffset = mcu.getEepromOffset();
             const settingsImage = await this.fourWay.readAddress(eepromOffset, EEPROM_SIZE);
 
-            await this.writeBootByte(eepromOffset, settingsImage, 0x00);
-            await this.writeFirmware(target, image, mcu);
-            await this.writeBootByte(eepromOffset, settingsImage, 0x01);
+            await this.writeBootByte(target, eepromOffset, settingsImage, 0x00, verify);
+            await this.writeFirmware(target, image, mcu, verify);
+            await this.writeBootByte(target, eepromOffset, settingsImage, 0x01, verify);
 
             this.emitter.emit('progress', { phase: 'reset', current: 0, total: 1, target });
             await this.fourWay.reset(target);
@@ -810,15 +1019,35 @@ export class Am32Session {
         }
     }
 
-    /** Rewrite the settings page with byte 0 forced to `value`. */
-    private async writeBootByte (eepromOffset: number, settingsImage: Uint8Array, value: number): Promise<void> {
+    /**
+     * Rewrite the settings page with byte 0 forced to `value`.
+     *
+     * Verified like any other settings write, and for a specific reason: if the
+     * write that clears byte 0 silently does nothing, the whole safety property of
+     * the bracket is gone -- the flash would proceed over a board that still claims
+     * to hold a complete application, so a failure part way through would leave it
+     * booting half an image instead of its bootloader.
+     */
+    private async writeBootByte (
+        target: number,
+        eepromOffset: number,
+        settingsImage: Uint8Array,
+        value: number,
+        verify: boolean
+    ): Promise<void> {
         const image = new Uint8Array(settingsImage);
         image[EepromLayout.BOOT_BYTE.offset] = value;
-        await this.fourWay.write(eepromOffset, image);
+        await this.writeSettingsPage(
+            eepromOffset,
+            image,
+            `ESC #${target + 1}: the boot byte (0x${value.toString(16).padStart(2, '0')})`,
+            verify
+        );
     }
 
     /**
-     * Stream the application region, in ascending 256-byte chunks.
+     * Stream the application region, one 1024-byte page at a time in 256-byte
+     * chunks, reading each chunk back before moving on.
      *
      * The bounds are derived from the MCU variant rather than the app's hardcoded
      * pages 4..0x40. The floor matters: `firmware_start` is 0x1000 on the F051 and
@@ -828,11 +1057,24 @@ export class Am32Session {
      * 0x40 was the *end of flash*, so a hex whose records reached that far would
      * have taken the settings page with it. The application image ends where the
      * EEPROM page begins.
+     *
+     * **The retry granularity is the page, not the chunk, and that is the whole
+     * reason this loop is shaped the way it is.** Flash can only clear bits, and a
+     * page is erased only by a write to its base
+     * (`AM32-bootloader/Mcu/f051/Src/eeprom.c:34-44`) -- so re-sending one 256-byte
+     * chunk into a page that has already been programmed cannot repair it, and will
+     * usually fail the bootloader's own memcmp instead. Restarting at the page base
+     * re-erases and reprograms, which is exactly what AM32's own bootloader updater
+     * does: `off = page_base; continue;` bounded by `BL_MAX_PAGE_ATTEMPTS`
+     * (`AM32/Src/bootloader_update.c:79-116`, the reason spelled out at `:99-104`).
+     * Block 5 shipped the chunk-level retry the link gives for free and recorded
+     * that it was not the firmware's model; this is the model.
      */
-    private async writeFirmware (target: number, image: Uint8Array, mcu: Mcu): Promise<void> {
+    private async writeFirmware (target: number, image: Uint8Array, mcu: Mcu, verify: boolean): Promise<void> {
         const begin = mcu.getFirmwareStart();
         const end = Math.min(image.length, mcu.getEepromOffset());
         const total = Math.max(0, end - begin);
+        const pageSize = mcu.getPageSize();
 
         this.emitter.emit('progress', { phase: 'flash', current: 0, total, target });
         if (total === 0) {
@@ -843,13 +1085,74 @@ export class Am32Session {
             return;
         }
 
-        let written = 0;
-        for (let address = begin; address < end; address += FLASH_CHUNK_BYTES) {
-            const chunk = image.subarray(address, Math.min(address + FLASH_CHUNK_BYTES, end));
-            await this.fourWay.write(address, chunk);
-            written += chunk.length;
-            this.emitter.emit('progress', { phase: 'flash', current: written, total, target });
+        // A bar that goes backwards is the usual symptom of a miscounted page
+        // loop, so a page being written a second time pauses it rather than
+        // rewinding it.
+        let highWater = 0;
+
+        for (let pageBase = begin; pageBase < end; pageBase += pageSize) {
+            const pageEnd = Math.min(pageBase + pageSize, end);
+
+            for (let attempt = 1; ; attempt += 1) {
+                try {
+                    for (let address = pageBase; address < pageEnd;) {
+                        const chunk = this.flashChunk(image, address, pageEnd);
+                        await this.fourWay.write(address, chunk);
+                        if (verify) {
+                            await this.fourWay.verifyRange(address, chunk, {
+                                what: `ESC #${target + 1}: the page at 0x${pageBase.toString(16).toUpperCase()}`
+                            });
+                        }
+                        address += chunk.length;
+
+                        const done = Math.min(total, address - begin);
+                        if (done > highWater) {
+                            highWater = done;
+                            this.emitter.emit('progress', { phase: 'flash', current: done, total, target });
+                        }
+                    }
+                    break;
+                } catch (error) {
+                    if (attempt >= PAGE_WRITE_ATTEMPTS || !isVerifyFailure(error)) {
+                        throw error;
+                    }
+                    this.emitter.emit('log', {
+                        level: 'warn',
+                        message: `ESC #${target + 1}: the page at 0x${pageBase.toString(16).toUpperCase()} ` +
+                            'did not verify; re-writing it from its base ' +
+                            `(attempt ${attempt + 1} of ${PAGE_WRITE_ATTEMPTS})`
+                    });
+                }
+            }
         }
+    }
+
+    /**
+     * One chunk of the image at `address`, never past `limit`, always an even
+     * number of bytes.
+     *
+     * `save_flash_nolib` refuses an odd length outright, because it programs
+     * halfwords (`Mcu/f051/Src/eeprom.c:20-22`) -- and it refuses it *after* an
+     * aligned write has already erased the page, so the failure mode is an ESC
+     * whose last page is blank. A real AM32 build ends on the 32-byte firmware-name
+     * block so its image length is even; a hand-built or mis-linked hex need not
+     * be. The pad byte is `0xFF`, which programs no bits and reads back from erased
+     * flash unchanged, so it costs nothing and verifies.
+     *
+     * The pad can never spill into the settings page: `address` is always even (it
+     * starts at a page base and advances by even lengths), so an odd length means
+     * an odd `limit`, and every page boundary and the EEPROM offset itself are
+     * even.
+     */
+    private flashChunk (image: Uint8Array, address: number, limit: number): Uint8Array {
+        const stop = Math.min(address + FLASH_CHUNK_BYTES, limit);
+        const chunk = image.subarray(address, stop);
+        if (chunk.length % 2 === 0) {
+            return chunk;
+        }
+        const padded = new Uint8Array(chunk.length + 1).fill(0xFF);
+        padded.set(chunk);
+        return padded;
     }
 
     /** `cmd_DeviceReset` -- leave the bootloader and run the application again. */

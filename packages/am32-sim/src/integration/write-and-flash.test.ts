@@ -568,6 +568,37 @@ describe('Am32Session.writeSettings: read-back verification', () => {
         expect(Array.from(esc.eeprom)).toEqual(Array.from(expected));
     });
 
+    it('does not answer a failed verify read by writing again', async () => {
+        // The retry is for a mismatch, not for a broken exchange. A read that fails
+        // is a channel that has stopped answering -- the link has already retried it
+        // ten times with a drain -- and re-erasing the settings page on the off
+        // chance is the last thing to do about it. So the write happens once and the
+        // read's own reason survives.
+        const h = await inPassthrough();
+        const esc = firstEsc(h);
+
+        // Break reads only after the base image has been read, so the failure lands
+        // on the verify rather than before the write.
+        const realRead = esc.read.bind(esc);
+        (esc as unknown as { read: (n: number) => unknown }).read = (length: number) => {
+            const result = realRead(length);
+            esc.shortRead = true;
+            return result;
+        };
+
+        const failure = await drive(h.clock, h.session.writeSettings(0, { TIMING_ADVANCE: 16 }))
+            .then(() => null, (error: unknown) => error as { reason?: string, target?: number });
+
+        // `esc-command` rather than `esc-read`: the FC's own read budget expires
+        // first, so it answers a non-OK ACK, which the ACK check catches before the
+        // short-reply check. `esc-read` is the ArduPilot `ACK_OK`-with-one-byte case
+        // (block 4's design decision 3). What matters here is that it is not
+        // `esc-verify` and that it happened once.
+        expect(failure?.reason).toBe('esc-command');
+        expect(failure?.target).toBe(0);
+        expect(esc.counts.write).toBe(1);
+    });
+
     it('skips the read-back when the caller asks it to', async () => {
         // Block 7's `--no-verify`. The write still happens; what goes away is the
         // exchange that proves it, so the result says `verified: false` rather than
@@ -619,10 +650,23 @@ describe('Am32Session.flash: per-chunk verification', () => {
             return realProgram();
         };
 
+        const progress: number[] = [];
+        h.session.on('progress', (event) => {
+            if (event.phase === 'flash') {
+                progress.push(event.current);
+            }
+        });
+
         await drive(h.clock, h.session.flash(0, firmwareHex()));
 
         // The page was streamed twice from its base, and the image is intact.
         expect(addresses.filter(address => address === pageBase).length).toBeGreaterThanOrEqual(2);
+        // Re-writing a page pauses the bar rather than rewinding it. A bar that goes
+        // backwards is the usual symptom of a miscounted page loop, and this is the
+        // only case that can produce one.
+        for (let i = 1; i < progress.length; i += 1) {
+            expect(progress[i]!).toBeGreaterThanOrEqual(progress[i - 1]!);
+        }
         expect(Array.from(esc.peek(pageBase, 512)))
             .toEqual(Array.from({ length: 512 }, (_, i) => (i * 7) & 0xFE));
         expect(esc.eeprom[EepromLayout.BOOT_BYTE.offset]).toBe(0x01);

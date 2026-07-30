@@ -270,7 +270,7 @@
           </div>
           <template #footer>
             <div class="text-right">
-              <UButton color="green" label="Apply" :disabled="savingOrApplyingSelectedEscs.length === 0 || escStore.isBusy" @click="applyDefaultConfig" />
+              <UButton color="green" label="Apply" :disabled="savingOrApplyingSelectedEscs.length === 0 || escStore.isBusy || fetchingDefaults" @click="applyDefaultConfig" />
             </div>
           </template>
         </UCard>
@@ -401,6 +401,9 @@ const isFlashingActive = computed(() => escStore.activeTarget > -1);
  * flash click, which is what this disables.
  */
 const downloading = ref(false);
+
+/** Same idea for the apply-defaults modal's catalog fetch. */
+const fetchingDefaults = ref(false);
 
 const progressIsIntermediate = computed(() => !['Writing', 'Verifying'].includes(escStore.step));
 
@@ -748,7 +751,18 @@ const applyDefaultConfig = async () => {
         eepromVersion = 2;
     }
 
-    const image = await fetchDefaultSettingsImage(first.meta.am32.fileName, eepromVersion);
+    // `escStore.isBusy` only covers the session call, so without this the button
+    // stays live for the whole fetch and a second click costs a wasted round trip
+    // and a "Busy" toast. Block 5's review found the same shape one step along this
+    // path, in the flash modal's release download.
+    let image: Uint8Array | null;
+    fetchingDefaults.value = true;
+    try {
+        image = await fetchDefaultSettingsImage(first.meta.am32.fileName, eepromVersion);
+    } finally {
+        fetchingDefaults.value = false;
+    }
+
     if (!image) {
         // Visible rather than silent: these are AM32's defaults, not necessarily
         // this board's, and a user whose catalog is misconfigured should know.

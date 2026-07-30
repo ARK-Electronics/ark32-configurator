@@ -10,6 +10,11 @@
 import { describe, expect, it } from 'vitest';
 import { LinkError } from 'am32-core/link/link';
 import { SessionError } from 'am32-core/errors';
+import { EEPROM_SIZE } from 'am32-core/eeprom/layout';
+import { FOUR_WAY_COMMANDS } from 'am32-core/framing/fourway';
+import type { FcVariant } from 'am32-core/link/timeout-policy';
+import type { GlobalOptions } from './args';
+import { timeoutPolicyFor } from './run';
 import {
     EXIT_CONNECT,
     EXIT_OK,
@@ -95,5 +100,54 @@ describe('exitCodeForTargets', () => {
             { ok: false, reason: 'image' },
             { ok: false, reason: 'esc-init' }
         ])).toBe(EXIT_PARTIAL);
+    });
+});
+
+// ---- the two flags that change durations and nothing observable -------------
+
+describe('timeoutPolicyFor', () => {
+    const globals = (overrides: Partial<GlobalOptions> = {}): GlobalOptions => ({
+        port: null,
+        baud: 115200,
+        fc: 'auto',
+        json: false,
+        verbose: false,
+        timeoutScale: 1,
+        sim: true,
+        escs: 4,
+        faults: [],
+        ...overrides
+    });
+
+    it('maps --fc auto to generic, which takes the worse of the two budgets', () => {
+        const policy = timeoutPolicyFor(globals());
+        expect(policy.variant).toBe('generic');
+
+        // Betaflight allows itself 2 ms per byte on a read where ArduPilot allows 1,
+        // and `generic` must not be given the tighter of the two before detection.
+        const read = (variant: FcVariant) =>
+            timeoutPolicyFor(globals({ fc: variant === 'generic' ? 'auto' : variant }))
+                .forFourWay(FOUR_WAY_COMMANDS.cmd_DeviceRead, EEPROM_SIZE);
+        expect(read('generic')).toBeGreaterThanOrEqual(read('ardupilot'));
+        expect(read('generic')).toBe(read('betaflight'));
+    });
+
+    it('passes --fc through as the variant', () => {
+        expect(timeoutPolicyFor(globals({ fc: 'ardupilot' })).variant).toBe('ardupilot');
+        expect(timeoutPolicyFor(globals({ fc: 'betaflight' })).variant).toBe('betaflight');
+    });
+
+    it('passes --timeout-scale through, and it multiplies a derived timeout', () => {
+        // The only reason this test exists: `scale` changes durations and nothing
+        // else, so a `--sim` run with no faults completes identically whether it is
+        // wired up or not. Nothing above `withRig` could notice it being dropped.
+        const plain = timeoutPolicyFor(globals());
+        const doubled = timeoutPolicyFor(globals({ timeoutScale: 2 }));
+
+        const read = (policy: ReturnType<typeof timeoutPolicyFor>) =>
+            policy.forFourWay(FOUR_WAY_COMMANDS.cmd_DeviceRead, EEPROM_SIZE);
+
+        expect(doubled.scale).toBe(2);
+        expect(read(doubled)).toBe(read(plain) * 2);
     });
 });

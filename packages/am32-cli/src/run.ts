@@ -271,10 +271,7 @@ async function withRig (
     work: (rig: Rig) => Promise<ExitCode>
 ): Promise<ExitCode> {
     const { globals } = args;
-    const policy = new TimeoutPolicy({
-        variant: fcVariant(globals),
-        scale: globals.timeoutScale
-    });
+    const policy = timeoutPolicyFor(globals);
 
     let transport: Transport;
     let clock: Clock;
@@ -365,8 +362,25 @@ async function withRig (
  * moment it knows. So `--fc` is a hint, not an override, and cannot make the
  * session believe a Betaflight board is an ArduPilot one.
  */
-function fcVariant (globals: GlobalOptions): FcVariant {
+export function fcVariant (globals: GlobalOptions): FcVariant {
     return globals.fc === 'auto' ? 'generic' : globals.fc;
+}
+
+/**
+ * The policy `--fc` and `--timeout-scale` produce.
+ *
+ * Exported and separate from `withRig` only so it can be tested. Both flags are
+ * otherwise unobservable from outside a session: they change *durations*, and a
+ * `--sim` run on a virtual clock with no faults completes either way, so nothing
+ * above would notice if `scale` stopped being passed through. That is the whole
+ * category of bug the block-6 note calls "a check that looks load-bearing and
+ * never runs", arriving as a flag nobody can see.
+ */
+export function timeoutPolicyFor (globals: GlobalOptions): TimeoutPolicy {
+    return new TimeoutPolicy({
+        variant: fcVariant(globals),
+        scale: globals.timeoutScale
+    });
 }
 
 /** Re-exported so `main.ts` and the tests agree on what a connect failure is. */

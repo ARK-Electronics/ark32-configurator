@@ -360,7 +360,6 @@
 
 <script setup lang="ts">
 import db from '~/src/db';
-import type { EscSettings } from 'am32-core/eeprom/layout';
 
 /**
  * UI and store mirroring only.
@@ -698,6 +697,46 @@ const startFlash = async (hexString: string) => {
     await connectToEsc();
 };
 
+/**
+ * The catalog's per-board default settings image, or null if it is out of reach.
+ *
+ * Two hops because the endpoint hands back a presigned URL rather than bytes. Both
+ * hops are status-checked: with no MinIO configured the route answers 503, and the
+ * old code fed that error body to `fetch()` as a URL, which threw out of the click
+ * handler. A null here is not a failure -- the session falls back to AM32's own
+ * built-in defaults.
+ */
+const fetchDefaultSettingsImage = async (
+    fileName: string | null,
+    version: number
+): Promise<Uint8Array | null> => {
+    try {
+        const url = await fetch(`/api/eeprom/${fileName}?version=${version}`).then((res) => {
+            if (res.status === 200) {
+                return res.text();
+            }
+            return fetch(`/api/eeprom/DEFAULT?version=${version}`)
+                .then(fallback => (fallback.status === 200 ? fallback.text() : null));
+        });
+        if (!url) {
+            return null;
+        }
+        const bytes = await fetch(url).then(res => res.arrayBuffer());
+        return new Uint8Array(bytes);
+    } catch {
+        return null;
+    }
+};
+
+/**
+ * Reset the selected ESCs to defaults.
+ *
+ * The decoding, the melody and the "which fields does a reset write" question all
+ * live in `session.applyDefaults` now. That last one was a real bug here: the app
+ * staged *every* field it decoded from the default file, so a reset also wrote the
+ * boot byte, the layout revision and the firmware version -- and a layout revision
+ * of 3 on an older ESC makes its firmware skip its own migration.
+ */
 const applyDefaultConfig = async () => {
     const first = escStore.firstValidEscData?.data;
     if (!first) {
@@ -709,36 +748,22 @@ const applyDefaultConfig = async () => {
         eepromVersion = 2;
     }
 
-    const eepromUrl = await fetch(`/api/eeprom/${first.meta.am32.fileName}?version=${eepromVersion}`)
-        .then((res) => {
-            if (res.status === 200) {
-                return res.text();
-            }
-            return fetch(`/api/eeprom/DEFAULT?version=${eepromVersion}`).then(res => res.text());
-        })
-        .catch(() => null);
-
-    if (!eepromUrl) {
+    const image = await fetchDefaultSettingsImage(first.meta.am32.fileName, eepromVersion);
+    if (!image) {
+        // Visible rather than silent: these are AM32's defaults, not necessarily
+        // this board's, and a user whose catalog is misconfigured should know.
         toast.add({
-            title: 'Error',
-            color: 'red',
-            description: 'Default eeprom not found'
+            title: 'Using built-in defaults',
+            color: 'orange',
+            description: 'The firmware catalog did not have a default for this board.'
         });
+    }
+
+    if (!await escSession.applyDefaults(savingOrApplyingSelectedEscs.value, image ?? undefined)) {
         return;
     }
 
-    const file = await fetch(eepromUrl).then(res => res.arrayBuffer());
-    const settings: EscSettings = escSession.decodeSettingsFile(new Uint8Array(file), eepromVersion);
-
-    settings.STARTUP_MELODY = (new Array(128)).fill(0xFF);
-
-    await escSession.applySettings(settings, savingOrApplyingSelectedEscs.value);
-
     applyDefaultConfigModalOpen.value = false;
-
-    if (applyConfigFile.value) {
-        applyConfigFile.value.input.value = '';
-    }
 };
 
 const downloadEscConfig = () => {

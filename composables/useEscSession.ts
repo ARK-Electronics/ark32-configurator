@@ -407,6 +407,58 @@ export const useEscSession = () => {
     };
 
     /**
+     * Reset the given one-based ESC numbers to defaults.
+     *
+     * `image` is the catalog's per-board default `.bin` when the app could fetch
+     * one; with no image the session applies AM32's own built-in defaults, so this
+     * works on a deployment with no firmware catalog. Either way the *policy* --
+     * which fields a reset writes, and the six it must not -- lives in
+     * `Am32Session.applyDefaults`, so the CLI cannot drift from the app. The app
+     * used to decode the file here and stage every decoded field, boot byte and
+     * layout revision included.
+     */
+    const applyDefaults = (escNumbers: number[], image?: Uint8Array): Promise<boolean> =>
+        exclusive('applying defaults', () => applyDefaultsImpl(escNumbers, image), () => false);
+
+    const applyDefaultsImpl = async (escNumbers: number[], image?: Uint8Array): Promise<boolean> => {
+        escStore.isSaving = true;
+        let allWritten = true;
+
+        try {
+            const session = requireSession();
+            await ensurePassthrough(session);
+
+            for (const n of escNumbers) {
+                const target = n - 1;
+                try {
+                    const result = await session.applyDefaults(target, image ? { image } : {});
+                    const entry = escStore.escData[target];
+                    if (entry?.data) {
+                        entry.data.settingsBuffer = result.image;
+                        entry.data.settings = result.settings;
+                        entry.data.settingsDirty = false;
+                    }
+                } catch (error) {
+                    const entry = escStore.escData[target];
+                    if (entry) {
+                        entry.isError = true;
+                    }
+                    allWritten = false;
+                    surface('Apply defaults failed', error);
+                }
+            }
+        } catch (error) {
+            surface('Apply defaults failed', error);
+            allWritten = false;
+        } finally {
+            escStore.isSaving = false;
+            escStore.step = '';
+        }
+
+        return allWritten;
+    };
+
+    /**
      * Flash `hex` to each of `targets` in turn.
      *
      * The `finally` is audit item **G**'s other half. `startFlash` had no
@@ -474,6 +526,7 @@ export const useEscSession = () => {
         readAll,
         saveDirtySettings,
         applySettings,
+        applyDefaults,
         flashTargets,
         decodeSettingsFile,
         get isConnected () {

@@ -850,6 +850,73 @@ describe('Am32Session.applyDefaults', () => {
     });
 });
 
+describe('fault knob: esc[n].failingFlashCell -- a page only a re-erase can repair', () => {
+    it('recovers a chunk the bootloader itself rejected, by re-writing its page', async () => {
+        // The case the page-base retry exists for, and the one that is easy to leave
+        // out. A cell that will not hold its charge makes the bootloader's own memcmp
+        // fail (`Mcu/f051/Src/eeprom.c:56-62`), so the ESC answers a bad ACK -- which
+        // arrives as `esc-command`, not `esc-verify`. The page is now partially
+        // programmed with bits that cannot be set back, so the link re-sending the
+        // same chunk fails for as long as it tries. Only the page-base write, which
+        // erases first, recovers.
+        const mcu = new Mcu(0x1F06);
+        const pageBase = mcu.getFirmwareStart();
+        const h = await inPassthrough();
+        const esc = firstEsc(h);
+
+        const addresses: number[] = [];
+        const realSetAddress = esc.setAddress.bind(esc);
+        (esc as unknown as { setAddress: (a: number) => unknown }).setAddress = (address: number) => {
+            addresses.push(address);
+            return realSetAddress(address);
+        };
+
+        // Sabotage the second firmware chunk, mid-page.
+        let writes = 0;
+        const realProgram = esc.programFlash.bind(esc);
+        (esc as unknown as { programFlash: () => unknown }).programFlash = () => {
+            writes += 1;
+            if (writes === 3) {
+                esc.failingFlashCell = 1;
+            }
+            return realProgram();
+        };
+
+        await drive(h.clock, h.session.flash(0, firmwareHex()));
+
+        expect(addresses.filter(address => address === pageBase).length).toBeGreaterThanOrEqual(2);
+        expect(Array.from(esc.peek(pageBase, 512)))
+            .toEqual(Array.from({ length: 512 }, (_, i) => (i * 7) & 0xFE));
+        expect(esc.eeprom[EepromLayout.BOOT_BYTE.offset]).toBe(0x01);
+        expect(h.logs.some(line => line.startsWith('warn:') && line.includes('re-writing it from its base')))
+            .toBe(true);
+    });
+
+    it('does not re-write a page when the ESC has simply stopped answering', async () => {
+        // The other side of the same predicate. A timeout means the channel is gone,
+        // and four page attempts on top of the link's ten would turn a prompt failure
+        // into a minute of silence for no possible gain.
+        const h = await inPassthrough();
+        const esc = firstEsc(h);
+
+        let writes = 0;
+        const realProgram = esc.programFlash.bind(esc);
+        (esc as unknown as { programFlash: () => unknown }).programFlash = () => {
+            writes += 1;
+            if (writes === 2) {
+                esc.unresponsive = true;
+            }
+            return realProgram();
+        };
+
+        await expect(drive(h.clock, h.session.flash(0, firmwareHex())))
+            .rejects.toMatchObject({ name: 'SessionError', target: 0 });
+
+        // One page's worth of link attempts, not four pages' worth.
+        expect(h.logs.some(line => line.includes('re-writing it from its base'))).toBe(false);
+    });
+});
+
 describe('fault knob: esc[n].silentWriteFailure -- an accepted write that did not stick', () => {
     it('is invisible without a read-back, and fatal with one', async () => {
         // The knob's own test, and the reason verification is not ceremony: with

@@ -304,13 +304,36 @@ const EEPROM_VERIFY_EXEMPT: ReadonlySet<number> = new Set([BOOTLOADER_STAMPED_OF
 const PAGE_WRITE_ATTEMPTS = 4;
 
 /**
- * True when a failure is a read-back mismatch rather than a broken exchange.
+ * Marker for a failure that erasing the page and writing it again could repair.
  *
- * The distinction decides whether writing again could possibly help. `Link`
- * wraps a `validate` rejection, so the reason can be a level or two down --
- * hence `causedBySessionError` rather than an `instanceof` check.
+ * Thrown by `writeAndVerifyRange` and caught by the two retry loops, so that
+ * *where* a failure came from decides whether to write again -- rather than a
+ * predicate over error reasons, which cannot tell a rejected write from a rejected
+ * read (both are `esc-command` with an ACK) and so cannot answer the question.
  */
-function isVerifyFailure (error: unknown): boolean {
+class RetryablePageFailure extends Error {
+    constructor (readonly failure: unknown) {
+        super(describeError(failure));
+        this.name = 'RetryablePageFailure';
+    }
+}
+
+/**
+ * True when the ESC answered and said no, as against not answering.
+ *
+ * `ack` is set only when `validate` had a reply to parse, so a non-OK ACK has one
+ * and a timeout does not. Note this does **not** identify a dead channel: an
+ * unresponsive ESC makes the *flight controller* answer `ACK_D_GENERAL_ERROR` on
+ * its behalf, so a pulled signal wire looks exactly like a bootloader that refused
+ * the write. Telling those apart is what the read-back is for.
+ */
+function rejectedByEsc (error: unknown): boolean {
+    const inner = causedBySessionError(error);
+    return inner?.reason === 'esc-command' && inner.ack !== undefined;
+}
+
+/** True when a read-back showed the ESC holding something else. */
+function isVerifyMismatch (error: unknown): boolean {
     return causedBySessionError(error)?.reason === 'esc-verify';
 }
 
@@ -851,25 +874,19 @@ export class Am32Session {
         what: string,
         verify: boolean
     ): Promise<Uint8Array> {
-        if (!verify) {
-            await this.fourWay.write(eepromOffset, image);
-            return image;
-        }
-
         for (let attempt = 1; ; attempt += 1) {
-            await this.fourWay.write(eepromOffset, image);
             try {
-                return await this.fourWay.verifyRange(eepromOffset, image, {
+                return await this.writeAndVerifyRange(eepromOffset, image, {
                     exempt: EEPROM_VERIFY_EXEMPT,
-                    what
+                    what,
+                    verify
                 });
             } catch (error) {
-                // Only a *verify* mismatch is worth writing again. A failed read is
-                // a channel that has stopped answering -- the link has already
-                // retried it ten times with a drain, and re-erasing the settings
-                // page on the off chance is the last thing to do about it.
-                if (attempt >= PAGE_WRITE_ATTEMPTS || !isVerifyFailure(error)) {
+                if (!(error instanceof RetryablePageFailure)) {
                     throw error;
+                }
+                if (attempt >= PAGE_WRITE_ATTEMPTS) {
+                    throw error.failure;
                 }
                 this.emitter.emit('log', {
                     level: 'warn',
@@ -878,6 +895,72 @@ export class Am32Session {
                 });
             }
         }
+    }
+
+    /**
+     * Write one range and read it back, or throw.
+     *
+     * The single place both write paths decide what a failure *means*, because the
+     * two ways a write can fail are not distinguishable from the reply:
+     *
+     *  - **The ESC rejected the write.** That is a non-OK ACK, and it covers two
+     *    completely different situations. Either the bootloader's own `memcmp`
+     *    failed, so the page is partially programmed with bits that cannot be set
+     *    back (`Mcu/f051/Src/eeprom.c:56-62`) and only a re-erase can repair it -- or
+     *    the channel has gone away, and the *flight controller* answered
+     *    `ACK_D_GENERAL_ERROR` on the ESC's behalf. Both firmwares collapse them to
+     *    the same ACK, so **the read-back is the arbiter**: a rejected write is not
+     *    treated as fatal, it sends us to look. If the read works, the ESC is alive
+     *    and the page is the problem. If the read fails too, the channel is gone and
+     *    the write's own error is what the caller wants to see.
+     *  - **The ESC accepted a write that did not take effect** -- ArduPilot's leaked
+     *    `ACK_OK` (`AP_BLHeli.cpp:928-932`). Nothing but the read-back finds this.
+     *
+     * With `verify: false` there is no arbiter, so a rejected write stays fatal.
+     */
+    private async writeAndVerifyRange (
+        address: number,
+        data: Uint8Array,
+        options: { what: string, verify: boolean, exempt?: ReadonlySet<number> }
+    ): Promise<Uint8Array> {
+        let rejected: unknown = null;
+
+        try {
+            await this.fourWay.write(address, data);
+        } catch (error) {
+            if (!options.verify || !rejectedByEsc(error)) {
+                throw error;
+            }
+            rejected = error;
+        }
+
+        if (!options.verify) {
+            return data;
+        }
+
+        let actual: Uint8Array;
+        try {
+            actual = await this.fourWay.verifyRange(address, data, {
+                exempt: options.exempt,
+                what: options.what
+            });
+        } catch (error) {
+            if (isVerifyMismatch(error)) {
+                throw new RetryablePageFailure(rejected ?? error);
+            }
+            // The read failed as well, so this is not a page that can be repaired --
+            // it is a channel that has stopped talking. Report the first failure.
+            throw rejected ?? error;
+        }
+
+        if (rejected) {
+            this.emitter.emit('log', {
+                level: 'warn',
+                message: `${options.what}: the write was refused but the bytes read back correct ` +
+                    `(${describeError(rejected)})`
+            });
+        }
+        return actual;
     }
 
     /**
@@ -1097,12 +1180,10 @@ export class Am32Session {
                 try {
                     for (let address = pageBase; address < pageEnd;) {
                         const chunk = this.flashChunk(image, address, pageEnd);
-                        await this.fourWay.write(address, chunk);
-                        if (verify) {
-                            await this.fourWay.verifyRange(address, chunk, {
-                                what: `ESC #${target + 1}: the page at 0x${pageBase.toString(16).toUpperCase()}`
-                            });
-                        }
+                        await this.writeAndVerifyRange(address, chunk, {
+                            what: `ESC #${target + 1}: the page at 0x${pageBase.toString(16).toUpperCase()}`,
+                            verify
+                        });
                         address += chunk.length;
 
                         const done = Math.min(total, address - begin);
@@ -1113,8 +1194,11 @@ export class Am32Session {
                     }
                     break;
                 } catch (error) {
-                    if (attempt >= PAGE_WRITE_ATTEMPTS || !isVerifyFailure(error)) {
+                    if (!(error instanceof RetryablePageFailure)) {
                         throw error;
+                    }
+                    if (attempt >= PAGE_WRITE_ATTEMPTS) {
+                        throw error.failure;
                     }
                     this.emitter.emit('log', {
                         level: 'warn',

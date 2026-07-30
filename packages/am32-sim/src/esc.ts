@@ -228,6 +228,24 @@ export class SimEsc {
      */
     silentWriteFailure: boolean | number = false;
 
+    /**
+     * The next write programs one byte wrong, so the bootloader's own verify
+     * rejects it. `true` for every write, a number for the next N.
+     *
+     * A flash cell that will not hold its charge, modelled exactly the way the
+     * firmware experiences one: {@link programFlash} clears one extra bit, and the
+     * `memcmp` that ends `save_flash_nolib` (`EE:61-62`) then fails on its own and
+     * answers a bad ACK (`BL:527-528`). Nothing about the ACK path is faked.
+     *
+     * This is the fault that makes the **page** the right retry granularity. The
+     * page is now partially programmed with bits that cannot be set back, so
+     * re-sending the same chunk fails for as long as anyone cares to try it -- only
+     * a write to the page base, which erases first (`EE:35-44`), can recover. It is
+     * the complement of {@link silentWriteFailure}, where nothing was programmed and
+     * either strategy would have worked.
+     */
+    failingFlashCell: boolean | number = false;
+
     /** Set {@link slowMs}. Spelled as a method because the plan's knob is `slowBy(ms)`. */
     slowBy (ms: number): this {
         this.slowMs = Math.max(0, ms);
@@ -244,6 +262,18 @@ export class SimEsc {
         }
         if (typeof this.silentWriteFailure === 'number' && this.silentWriteFailure > 0) {
             this.silentWriteFailure -= 1;
+            return true;
+        }
+        return false;
+    }
+
+    /** Same shape, for {@link failingFlashCell}. */
+    private takeFailingFlashCell (): boolean {
+        if (this.failingFlashCell === true) {
+            return true;
+        }
+        if (typeof this.failingFlashCell === 'number' && this.failingFlashCell > 0) {
+            this.failingFlashCell -= 1;
             return true;
         }
         return false;
@@ -488,6 +518,9 @@ export class SimEsc {
             this.erasePageAt(this.address);
         }
         this.program(this.address, payload);
+        if (this.takeFailingFlashCell()) {
+            this.loseOneBit(this.address, payload);
+        }
 
         // The bootloader verifies with memcmp and reports a mismatch (EE:62).
         const written = this.flash.slice(this.address, this.address + payload.length);
@@ -591,6 +624,24 @@ export class SimEsc {
     private erasePageAt (address: number): void {
         const page = Math.floor(address / this.pageSize) * this.pageSize;
         this.flash.fill(0xFF, page, page + this.pageSize);
+    }
+
+    /**
+     * Clear one bit that was supposed to stay set -- {@link failingFlashCell}.
+     *
+     * The lowest set bit of the first byte that has one, so the sabotage is always
+     * something flash could actually do (a cell that failed to hold its charge) and
+     * never something it could not (a bit appearing out of nowhere). The caller's
+     * `memcmp` finds it; nothing here reports it.
+     */
+    private loseOneBit (address: number, payload: Uint8Array): void {
+        for (let i = 0; i < payload.length; i += 1) {
+            const value = this.flash[address + i] as number;
+            if (value !== 0) {
+                this.flash[address + i] = value & (value - 1);
+                return;
+            }
+        }
     }
 
     /** Flash programming can only clear bits, never set them. */

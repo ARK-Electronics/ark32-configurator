@@ -28,6 +28,7 @@ KNOBS=(
     # fails when it is removed, and block 3's rule is that a knob nothing exercises
     # is a knob that has stopped working.
     silentWriteFailure  # A,C -- a write must be proven, not assumed
+    failingFlashCell    # C  -- a rejected chunk must be repaired at the page base
 )
 
 # The test-side check looks for a suite *named after* the knob -- the plan's

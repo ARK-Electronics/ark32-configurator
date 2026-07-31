@@ -74,6 +74,16 @@ export interface LinkRequestOptions {
      * meaning the app's `sendWithPromise` retry counter always had.
      */
     retries?: number
+    /**
+     * Per-retry delays, indexed by retry: retry `n` waits `retryDelaysMs[n-2]`,
+     * and the last entry repeats when the ladder is shorter than the attempts.
+     * Overrides the link's scalar delay for this request. A fixed retry
+     * cadence can resonate with -- or worse, sustain -- a periodic blind
+     * window on the far side of the wire; see `FourWaySession.initFlash` for
+     * the case that earned this knob, where the long rungs are deliberate
+     * silences that let the ESC's own watchdog fire.
+     */
+    retryDelaysMs?: readonly number[]
     validate?: LinkValidator
     /** Skip the pre-attempt drain. Only for a command whose reply is a stream. */
     drain?: boolean
@@ -219,7 +229,11 @@ export class Link {
 
         for (let attempt = 1; attempt <= attempts; attempt += 1) {
             if (attempt > 1) {
-                await this.clock.sleep(this.retryDelayMs);
+                const ladder = options.retryDelaysMs;
+                const delay = ladder !== undefined && ladder.length > 0
+                    ? ladder[Math.min(attempt - 2, ladder.length - 1)] as number
+                    : this.retryDelayMs;
+                await this.clock.sleep(delay);
             }
 
             if (options.drain !== false) {
@@ -286,16 +300,30 @@ export class Link {
             });
     }
 
+    /**
+     * The write is raced against the exchange's timeout rather than awaited
+     * first. A wedged USB CDC endpoint can hold a write pending forever, and
+     * before the race that meant two failures at once, both seen on hardware:
+     * the exchange hung with no timeout left to bound it, and if the timeout
+     * fired while the write was still pending, `settled` was rejected with
+     * nothing yet awaiting it -- an unhandled rejection, which kills the whole
+     * process on Node.
+     */
     private async runAttempt (frame: Uint8Array, settled: Promise<Uint8Array>, label: string): Promise<Uint8Array> {
-        try {
-            await this.transport.write(frame);
-        } catch (error) {
-            // If the timeout already fired while the write was pending, `settled`
-            // is rejected and nothing is going to await it. Attach a handler so
-            // that does not surface as an unhandled rejection.
-            settled.catch(() => {});
+        const write = this.transport.write(frame).catch((error: unknown) => {
             throw new LinkError('write', `${label}: write failed: ${describe(error)}`, 1, { cause: error });
+        });
+
+        try {
+            await Promise.race([write, settled]);
+        } finally {
+            // Whichever promise lost the race settles later, or never, with
+            // nothing awaiting it. Keep both observed so a late rejection
+            // cannot surface as an unhandled one.
+            write.catch(() => {});
+            settled.catch(() => {});
         }
+
         return settled;
     }
 

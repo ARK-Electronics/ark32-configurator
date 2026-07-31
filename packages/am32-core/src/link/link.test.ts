@@ -215,13 +215,14 @@ describe('Link: every path settles (audit G)', () => {
         expect(link.stats.timeouts).toBe(3);
     });
 
-    it('does not leak an unhandled rejection when a slow write fails after the timeout', async () => {
+    it('answers the caller at the deadline even when the write is still pending', async () => {
         const { transport, clock, link } = await makeLink();
 
         // The nastiest ordering: the budget runs out while the write is still
-        // pending, and only then does the write fail. Vitest fails the run on an
-        // unhandled rejection, so this pins that the already-rejected timeout
-        // promise gets a handler even though the caller sees the write error.
+        // pending, and only later does the write fail. The timeout must reach
+        // the caller at the deadline -- the write is raced, not awaited -- and
+        // the write's own late rejection must stay observed. Vitest fails the
+        // run on an unhandled rejection, so the second half pins itself.
         let failWrite!: (error: Error) => void;
         transport.writeGate = new Promise<void>((_resolve, reject) => {
             failWrite = reject;
@@ -229,12 +230,55 @@ describe('Link: every path settles (audit G)', () => {
 
         const result = settle(link.request(readRequest(4), { ...baseOptions, timeout: 100, retries: 1 }));
         await clock.advance(100);
-        failWrite(new Error('device disconnected mid-write'));
-        await clock.advance(0);
 
         const outcome = await result;
         expect(outcome.ok).toBe(false);
-        expect(outcome.ok === false && (outcome.error as LinkError).reason).toBe('write');
+        expect(outcome.ok === false && (outcome.error as LinkError).reason).toBe('timeout');
+
+        failWrite(new Error('device disconnected mid-write'));
+        await clock.advance(0);
+    });
+
+    it('walks the retry-delay ladder, repeating its last rung', async () => {
+        const { clock, link } = await makeLink();
+
+        // No replies ever arrive, so every attempt runs out its 100 ms budget.
+        // The ladder gives retries 100 then 500 then 100 again -- the shape
+        // initFlash uses, where the long rung is a deliberate silence.
+        const result = settle(link.request(readRequest(4), {
+            ...baseOptions,
+            timeout: 100,
+            retries: 5,
+            retryDelaysMs: [100, 500, 100]
+        }));
+        await clock.runAll();
+
+        const outcome = await result;
+        expect(outcome.ok).toBe(false);
+        // 5 x 100 ms attempts, 100 + 500 + 100 + 100 ms of ladder (the last
+        // rung repeats), and a 25 ms quiet-window drain before each retry (the
+        // failed attempt marked the line dirty).
+        expect(clock.now()).toBe(1400);
+    });
+
+    it('bounds a write that never settles instead of hanging the exchange', async () => {
+        const { transport, clock, link } = await makeLink();
+        // A wedged CDC endpoint: the write neither resolves nor rejects, ever.
+        transport.writeGate = new Promise<void>(() => {});
+
+        const result = settle(link.request(readRequest(4), {
+            ...baseOptions,
+            timeout: 100,
+            retries: 2,
+            label: 'wedged'
+        }));
+        await clock.runAll();
+
+        const outcome = await result;
+        expect(outcome.ok).toBe(false);
+        expect(outcome.ok === false && (outcome.error as LinkError).reason).toBe('timeout');
+        expect(link.stats.timeouts).toBe(2);
+        expect(transport.writes).toHaveLength(2);
     });
 
     it('rejects a request on a closed transport without writing', async () => {

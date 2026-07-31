@@ -1,5 +1,20 @@
+import { fileURLToPath } from 'node:url';
+
 // https://nuxt.com/docs/api/configuration/nuxt-config
 export default defineNuxtConfig({
+    // The protocol core is consumed straight from TypeScript source rather than
+    // a build artifact, so there is no build step to forget and no stale dist to
+    // debug. `transpile` is what makes Vite compile it instead of treating a
+    // workspace symlink as a prebuilt dependency.
+    alias: {
+        'am32-core': fileURLToPath(new URL('./packages/am32-core/src', import.meta.url)),
+        'am32-web': fileURLToPath(new URL('./packages/am32-web/src', import.meta.url))
+    },
+
+    build: {
+        transpile: ['am32-core', 'am32-web']
+    },
+
     devtools: {
         enabled: true,
 
@@ -23,6 +38,14 @@ export default defineNuxtConfig({
     },
 
     ssr: false,
+
+    // Fail if the requested port is taken (avoids silent move to 3001 and a
+    // confused ./run.sh health check).
+    vite: {
+        server: {
+            strictPort: true
+        }
+    },
 
     runtimeConfig: {
         redis: { // Default values
@@ -75,13 +98,13 @@ export default defineNuxtConfig({
         registerType: 'autoUpdate',
         manifest: {
             id: '/',
-            name: 'AM32 configurator',
-            short_name: 'AM32CONF',
+            name: 'ARK32 configurator',
+            short_name: 'ARK32CONF',
             theme_color: '#000000',
-            description: 'Configurator for the ESC firmware AM32',
+            description: 'Configurator for the ESC firmware ARK32',
             icons: [
                 {
-                    src: 'assets/images/am32-logo.png',
+                    src: 'assets/images/ark32-logo.png',
                     sizes: '848x848',
                     type: 'image/png'
                 },

@@ -1,0 +1,15 @@
+{
+    "name": "am32-node",
+    "version": "0.0.0",
+    "private": true,
+    "type": "module",
+    "description": "node-serialport Transport and port enumeration for am32-core. Node-only.",
+    "exports": {
+        ".": "./src/index.ts",
+        "./*": "./src/*.ts"
+    },
+    "dependencies": {
+        "am32-core": "workspace:*",
+        "serialport": "^13.0.0"
+    }
+}

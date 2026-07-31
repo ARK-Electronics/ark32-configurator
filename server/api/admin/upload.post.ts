@@ -1,6 +1,4 @@
 import { randomUUID } from 'crypto';
-import { writeFile, mkdir } from 'fs/promises';
-import { join } from 'path';
 import { readFormData } from 'h3';
 
 export default defineEventHandler(async (event) => {

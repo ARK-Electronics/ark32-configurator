@@ -62,8 +62,8 @@
 </template>
 <script setup lang="ts">
 import Rtttl from 'bluejay-rtttl-parse';
-import type { EepromLayoutKeys } from '~/src/eeprom';
-import type { McuInfo } from '~/src/mcu';
+import type { EepromLayoutKeys } from 'am32-core/eeprom/layout';
+import type { McuInfo } from 'am32-core/mcu';
 
 interface SettingFieldProps {
     name?: string;

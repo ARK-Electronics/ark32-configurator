@@ -1,0 +1,15 @@
+{
+    "name": "am32-core",
+    "version": "0.0.0",
+    "private": true,
+    "type": "module",
+    "description": "Transport-agnostic AM32/MSP/4-way protocol core. No DOM, no Node, no Vue.",
+    "exports": {
+        ".": "./src/index.ts",
+        "./link": "./src/link/index.ts",
+        "./*": "./src/*.ts"
+    },
+    "scripts": {
+        "typecheck": "tsc -p tsconfig.json --noEmit"
+    }
+}

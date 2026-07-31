@@ -1,0 +1,64 @@
+# Standalone local stack for ARK32 configurator (no external Traefik networks).
+# Usage:
+#   cp stack.env.example stack.env   # edit if needed
+#   docker compose -f docker-compose.local.yml up --build
+# Then open http://localhost:3000 (Chrome/Edge required for Web Serial).
+
+services:
+  configurator:
+    container_name: ark32-configurator
+    build:
+      context: ./
+      dockerfile: docker/Dockerfile
+      args:
+        DATABASE_URL: mysql://am32:am32password@mariadb:3306/am32
+    ports:
+      - "3000:3000"
+    # Optional overrides: create stack.env from stack.env.example
+    # env_file: stack.env
+    environment:
+      HOST: 0.0.0.0
+      NODE_ENV: production
+      REDIS_HOST: cache
+      MYSQL_HOST: mariadb
+      MYSQL_PORT: 3306
+      MYSQL_USER: am32
+      MYSQL_PASSWORD: am32password
+      MYSQL_DATABASE: am32
+      DATABASE_URL: mysql://am32:am32password@mariadb:3306/am32
+    volumes:
+      - uploads:/usr/src/app/public/uploads
+    depends_on:
+      mariadb:
+        condition: service_healthy
+      cache:
+        condition: service_started
+    restart: unless-stopped
+
+  cache:
+    image: redis:7
+    volumes:
+      - cache:/data
+    restart: unless-stopped
+
+  mariadb:
+    image: mariadb:11
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-rootpassword}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-am32}
+      MYSQL_USER: ${MYSQL_USER:-am32}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-am32password}
+    volumes:
+      - mariadb:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+
+volumes:
+  cache:
+  mariadb:
+  uploads:

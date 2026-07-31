@@ -11,7 +11,7 @@
           Please connect to a device and read settings.
         </div>
       </div>
-      <div v-else-if="serialStore.isFourWay || serialStore.isDirectConnect" class="pt-4 pb-12 h-full">
+      <div v-else-if="serialStore.isFourWay" class="pt-4 pb-12 h-full">
         <UTabs
           :items="tabs"
         >
@@ -82,7 +82,8 @@
                     :switches="[{
                       field: 'DISABLE_STICK_CALIBRATION',
                       name: 'Disable stick calibration',
-                      minFirmwareVersion: 'v2.19'
+                      minFirmwareVersion: 'v2.19',
+                      minEepromVersion: 3
                     }]"
                     @change="onSettingsChange"
                   >
@@ -480,6 +481,7 @@
                       @change="onSettingsChange"
                     />
                     <SettingField
+                      v-if="isInEEpromVersion(layoutVersion, 3)"
                       :esc-info="escStore.selectedEscInfo"
                       field="ACTIVE_BRAKE_POWER"
                       name="Active brake power"
@@ -560,7 +562,7 @@
   </div>
 </template>
 <script setup lang="ts">
-import type { EepromLayoutKeys } from '~/src/eeprom';
+import type { EepromLayoutKeys } from 'am32-core/eeprom/layout';
 
 const serialStore = useSerialStore();
 const escStore = useEscStore();

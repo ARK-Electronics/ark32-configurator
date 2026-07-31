@@ -8,7 +8,7 @@
             to="/"
             class="text-xl font-bold text-red-500"
           >
-            AM32 Admin
+            ARK32 Admin
           </NuxtLink>
           <span class="text-gray-400">|</span>
           <div class="flex items-center gap-4">

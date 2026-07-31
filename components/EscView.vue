@@ -106,8 +106,8 @@
   </div>
 </template>
 <script setup lang="ts">
-import type { EepromLayoutKeys } from '~/src/eeprom';
-import type { EscData } from '~/src/mcu';
+import type { EepromLayoutKeys } from 'am32-core/eeprom/layout';
+import type { EscData } from 'am32-core/mcu';
 
 const props = defineProps<{
     isLoading: boolean,

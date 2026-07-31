@@ -1,44 +1,21 @@
+// Web Serial globals (`navigator.serial`, `SerialPort`). These used to arrive
+// as a side effect of importing `webserial-wrapper`, which depended on
+// @types/dom-serial; block 2 deleted that package, so the reference has to be
+// explicit. @types/dom-serial is now a direct devDependency.
+/// <reference types="dom-serial" />
+
 type LogMessageType = undefined | null | 'warning' | 'error'
 type LogMessage = [Date, string, LogMessageType]
-type LogFn = (s: string) => void;
-type PromiseFn<T = any> = (a: T | PromiseLike<T> | unknown | PromiseLike<any>) => any
-interface MspData {
-    type: 'bf' | 'qs' | 'kiss' | 'inav' | 'ardu' | 'fettec' | 'emuf' | null,
-    protocol_version: number
-    api_version: string,
-    batteryData: {
-        cellCount: number,
-        capacity: number,
-        voltage: number,
-        drawn: number,
-        amps: number
-    } | null,
-    motorCount: number
-}
 
-interface FourWayResponse {
-    command: number;
-    address: number;
-    ack: number;
-    checksum: number;
-    params: Uint8Array;
-}
+// Three types lived here for the app's own protocol classes: the MSP facts the
+// FC reported, a log-callback alias and a promise-callback alias. Block 5 deleted
+// all three with those classes (audit item I) -- what the FC reported is `FcInfo`
+// from `am32-core/session` now, produced by the same code the CLI runs. The
+// removed names are listed in `scripts/assert-deleted.sh`, which greps this file
+// for them.
 
 type SettingsType = 'select' | 'bool' | 'string' | 'number' | 'rtttl';
 type SettingsSelectOptionsType = { label: string, value: number };
-
-interface HexData {
-    address: number,
-    bytes: number,
-    data: number[]
-}
-
-interface Hex {
-    data: HexData[],
-    endOfFile: boolean,
-    bytes: number,
-    startLinearAddress: number
-}
 
 interface BlobFolderFile {
     name: string;
@@ -51,15 +28,6 @@ interface BlobFolder {
     files: BlobFolderFile[],
     children: BlobFolder[]
 }
-
-type AmjType = {
-    type: 'bl_update' | 'fw_update',
-    githash: string,
-    version: string,
-    mcuType: 'F421' | 'F051' | 'F415' | 'E230' | 'G071' | 'F031',
-    pin: 'PA2' | 'PB4' | string,
-    hex: string
-};
 
 type CacheEntry = {
     name: string,

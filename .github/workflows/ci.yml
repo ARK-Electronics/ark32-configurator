@@ -1,0 +1,96 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # The app never talks to a database during lint/typecheck/test, but prisma
+  # generate and nitro's config load want the variable to exist. Same dummy
+  # value ./run.sh uses locally.
+  DATABASE_URL: mysql://am32:am32password@127.0.0.1:3308/am32
+  NUXT_TELEMETRY_DISABLED: '1'
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+
+      - name: Enable Yarn 4
+        run: corepack enable
+
+      - name: Install
+        run: yarn install --immutable
+
+      # The root tsconfig extends ./.nuxt/tsconfig.json, which does not exist in
+      # a fresh checkout. Without this, eslint's TypeScript resolver and
+      # `prisma generate` both fail on a file-not-found rather than on anything
+      # real. `yarn verify` and `yarn build` run it themselves; it is a separate
+      # step here so a failure is legible in the job log.
+      - name: Prepare Nuxt
+        run: yarn nuxt prepare
+
+      # Split out from `yarn verify` so a failure names the stage in the job log
+      # instead of collapsing into one red step.
+      - name: Lint
+        run: yarn lint
+
+      - name: Typecheck core (proves the DOM/Node exclusion still holds)
+        run: yarn typecheck:core
+
+      - name: Typecheck app
+        run: yarn typecheck:app
+
+      - name: Test
+        run: yarn test
+
+      # Regression gates from the 2026-07 overhaul (issue #3): deleted features
+      # stay deleted, the core stays clock-injected, and every simulator fault
+      # knob keeps a test naming it.
+      - name: Assert gates
+        run: |
+          bash scripts/assert-deleted.sh
+          bash scripts/assert-core-hygiene.sh
+          bash scripts/assert-fault-coverage.sh
+
+      # `yarn test` covers all of this against `run()` in-process. This covers the
+      # thing it cannot: that the *built* binary has it. Between the two sit the
+      # esbuild bundle, the shebang, the `bin` link and the argv/exit-code plumbing
+      # in main.ts -- a bundling mistake breaks the binary and leaves the suite
+      # green. It also re-runs `yarn install`, because the `bin` link only appears
+      # once dist/ exists.
+      - name: Smoke-test ark32 --sim
+        run: |
+          yarn build:cli
+          yarn install --immutable
+          bash scripts/assert-cli-sim.sh
+
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+
+      - name: Enable Yarn 4
+        run: corepack enable
+
+      - name: Install
+        run: yarn install --immutable
+
+      # `yarn verify` does not build the app (app.vue has no lang="ts", so a
+      # dangling import there only fails here). Master must always build.
+      - name: Build
+        run: yarn build

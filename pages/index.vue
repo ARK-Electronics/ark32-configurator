@@ -16,7 +16,7 @@
           <UCard>
             <UContainer>
               <h1 class="text-3xl font-bold mb-4">
-                AM32 MultiRotor ESC Firmware
+                ARK32 MultiRotor ESC Firmware
               </h1>
               <p class="text-lg mb-8">
                 Specialized firmware for speed controllers, designed for

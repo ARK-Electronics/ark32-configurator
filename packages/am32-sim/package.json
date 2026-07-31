@@ -1,0 +1,14 @@
+{
+    "name": "am32-sim",
+    "version": "0.0.0",
+    "private": true,
+    "type": "module",
+    "description": "Simulated flight controller and AM32 ESCs behind the am32-core Transport interface. Test and --sim only; never shipped to the browser.",
+    "exports": {
+        ".": "./src/index.ts",
+        "./*": "./src/*.ts"
+    },
+    "dependencies": {
+        "am32-core": "workspace:*"
+    }
+}

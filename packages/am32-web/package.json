@@ -1,0 +1,14 @@
+{
+    "name": "am32-web",
+    "version": "0.0.0",
+    "private": true,
+    "type": "module",
+    "description": "Web Serial Transport for am32-core. Browser-only.",
+    "exports": {
+        ".": "./src/index.ts",
+        "./*": "./src/*.ts"
+    },
+    "dependencies": {
+        "am32-core": "workspace:*"
+    }
+}

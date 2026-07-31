@@ -120,6 +120,15 @@ export type {
 export { decodeBytes, decodeBytesZ } from './text';
 
 export {
+    DEFAULT_FIRMWARE_OWNER,
+    DEFAULT_FIRMWARE_REPO,
+    findFirmwareAsset,
+    firmwareAssetName,
+    firmwareVersionFromTag
+} from './releases';
+export type { NamedAsset } from './releases';
+
+export {
     ARDUPILOT_QUIRKS,
     BETAFLIGHT_QUIRKS,
     GENERIC_QUIRKS,

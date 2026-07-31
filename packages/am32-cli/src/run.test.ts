@@ -44,6 +44,8 @@ interface FakeOptions {
     openPort?: (request: OpenPortRequest) => Promise<never>
     /** What `listPorts` returns. */
     listPorts?: () => Promise<{ path: string, vendorId?: string, productId?: string }[]>
+    /** What `httpGet` answers. Rejects by default: no network in these tests. */
+    httpGet?: CliEnv['httpGet']
 }
 
 async function cli (argv: string[], options: FakeOptions = {}): Promise<Result> {
@@ -84,6 +86,8 @@ async function cli (argv: string[], options: FakeOptions = {}): Promise<Result> 
             new SessionError('transport', 'no serial port in this test')
         )),
         listPorts: options.listPorts ?? (() => Promise.resolve([])),
+        httpGet: options.httpGet ?? (() => Promise.reject(new Error('no network in this test'))),
+        firmware: { owner: 'ARK-Electronics', repo: 'ARK32', token: null },
         version: '0.0.0-test'
     };
 
@@ -786,5 +790,48 @@ describe('ark32 --fault: every knob reaches the simulator', () => {
 
         const garbage = await cli(['--sim', '--escs', '2', '--fault', 'link=injectGarbage:8', 'enumerate']);
         expect(garbage.code).toBe(EXIT_OK);
+    });
+});
+
+describe('releases and flash --release through run()', () => {
+    const NIGHTLY_JSON = JSON.stringify([{
+        tag_name: 'nightly',
+        prerelease: true,
+        published_at: '2026-07-30T06:56:32Z',
+        assets: [{ name: 'AM32_ARK_4IN1_F051_3.0-ark.hex', browser_download_url: 'https://example.test/a' }]
+    }]);
+
+    it('lists the catalog with no port and no rig', async () => {
+        const result = await cli(['releases', '--json'], {
+            httpGet: () => Promise.resolve({ status: 200, body: NIGHTLY_JSON })
+        });
+
+        expect(result.code).toBe(EXIT_OK);
+        const releases = result.json().releases as { tag: string, hexAssets: number }[];
+        expect(releases).toHaveLength(1);
+        expect(releases[0]?.tag).toBe('nightly');
+        expect(releases[0]?.hexAssets).toBe(1);
+    });
+
+    it('exits 2 when the catalog is unreachable', async () => {
+        const result = await cli(['releases'], {
+            httpGet: () => Promise.reject(new Error('offline'))
+        });
+
+        expect(result.code).toBe(EXIT_CONNECT);
+        expect(result.stderr).toContain('api.github.com');
+    });
+
+    it('rejects an unknown tag as exit 3, before any port is opened', async () => {
+        // The default openPort in these tests rejects, so a run that reached it
+        // would come back 2 -- a 3 with this stderr proves the tag was resolved
+        // and refused with nothing attempted.
+        const result = await cli(['-p', '/dev/ttyACM0', 'flash', '--esc', 'all', '--release', 'nope'], {
+            httpGet: () => Promise.resolve({ status: 200, body: NIGHTLY_JSON })
+        });
+
+        expect(result.code).toBe(3);
+        expect(result.stderr).toContain("no release tagged 'nope'");
+        expect(result.stderr).toContain('nightly');
     });
 });

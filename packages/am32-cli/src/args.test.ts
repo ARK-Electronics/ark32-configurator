@@ -28,6 +28,37 @@ function why (argv: string[]): string {
     return parsed.message;
 }
 
+describe('parseArgs: releases and flash --release', () => {
+    it('parses releases, which needs neither a port nor --esc', () => {
+        const parsed = ok(['releases']);
+        expect(parsed.command).toBe('releases');
+        expect(parsed.globals.port).toBeNull();
+    });
+
+    it('rejects flags releases does not take', () => {
+        expect(why(['releases', '--esc', 'all'])).toContain('releases does not take --esc');
+    });
+
+    it('parses flash --release', () => {
+        const parsed = ok(['-p', '/dev/ttyACM0', 'flash', '--esc', 'all', '--release', 'nightly']);
+        expect(parsed.release).toBe('nightly');
+        expect(parsed.hex).toBeNull();
+    });
+
+    it('rejects --hex and --release together', () => {
+        expect(why(['-p', 'x', 'flash', '--esc', 'all', '--hex', 'a.hex', '--release', 'nightly']))
+            .toContain('not both');
+    });
+
+    it('names both roads when flash has neither', () => {
+        expect(why(['-p', 'x', 'flash', '--esc', 'all'])).toContain('--release');
+    });
+
+    it('rejects --release under --sim, naming the offline reason', () => {
+        expect(why(['--sim', 'flash', '--esc', 'all', '--release', 'nightly'])).toContain('offline');
+    });
+});
+
 describe('parseArgs: help and version', () => {
     it('answers --help anywhere on the line, before validating anything else', () => {
         expect(parseArgs(['--help']).kind).toBe('help');

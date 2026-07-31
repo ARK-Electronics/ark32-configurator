@@ -23,6 +23,7 @@ export const COMMANDS = [
     'get',
     'set',
     'defaults',
+    'releases',
     'flash',
     'reset'
 ] as const;
@@ -88,6 +89,8 @@ export interface ParsedArgs {
     input: string | null
     /** `--hex`, a firmware image. */
     hex: string | null
+    /** `--release`, a GitHub release tag to flash from. */
+    release: string | null
     /** False when `--no-verify` was given. Every write path reads this. */
     verify: boolean
     allowMcuMismatch: boolean
@@ -128,7 +131,8 @@ const VALUED_FLAGS = new Set([
     '--esc',
     '-o', '--out',
     '-i', '--in',
-    '--hex'
+    '--hex',
+    '--release'
 ]);
 
 /** Which commands accept which command-scoped flags. Anything else is exit 3. */
@@ -141,7 +145,8 @@ const COMMAND_FLAGS: Record<CommandName, readonly string[]> = {
     get: ['--esc'],
     set: ['--esc', '--no-verify'],
     defaults: ['--esc', '--no-verify'],
-    flash: ['--esc', '--hex', '--no-verify', '--allow-mcu-mismatch'],
+    releases: [],
+    flash: ['--esc', '--hex', '--release', '--no-verify', '--allow-mcu-mismatch'],
     reset: ['--esc']
 };
 
@@ -208,7 +213,9 @@ Commands
   get      --esc 1 [KEY...]               print named settings
   set      --esc all KEY=VALUE...         read-modify-write, byte-preserving
   defaults --esc all                      reset to AM32's defaults, keeping identity
+  releases                                list firmware releases on GitHub
   flash    --esc 1|all --hex FILE         flash an Intel HEX firmware image
+           --esc all --release TAG        ...or each ESC's matching release asset
   reset    --esc all                      leave the bootloader and run the firmware
 
 Global flags
@@ -229,8 +236,14 @@ Command flags
   -o, --out DIR          where 'read' writes its .bin files
   -i, --in FILE          the settings image 'write' applies
       --hex FILE         the firmware image 'flash' writes
+      --release TAG      flash from a GitHub release (e.g. nightly): each ESC gets
+                         the asset matching its own firmware name
       --no-verify        skip read-back verification (write, set, defaults, flash)
       --allow-mcu-mismatch  flash a hex whose firmware name is not this board's
+
+Releases come from github.com/ARK-Electronics/ARK32; override with
+GITHUB_FIRMWARE_OWNER / GITHUB_FIRMWARE_REPO, and set GITHUB_TOKEN (or GH_TOKEN)
+if the anonymous GitHub rate limit bites.
 
 Fault specs (--sim only)
   escN=unresponsive            escN=slowBy:MS           escN=corruptCrc[:COUNT]
@@ -246,6 +259,7 @@ Examples
   ark32 --sim enumerate --escs 4
   ark32 --sim write --esc all -i fixture.bin
   ark32 -p /dev/ttyACM0 set --esc all TIMING_ADVANCE=16
+  ark32 -p /dev/ttyACM0 flash --esc all --release nightly
   ark32 --sim --fault esc3=unresponsive enumerate --json`;
 
 function parseInteger (flag: string, raw: string, min: number): number | ParseFailure {
@@ -419,6 +433,7 @@ export function parseArgs (argv: readonly string[]): ParseResult {
     let out: string | null = null;
     let input: string | null = null;
     let hex: string | null = null;
+    let release: string | null = null;
     let verify = true;
     let allowMcuMismatch = false;
     const operands: string[] = [];
@@ -509,6 +524,10 @@ export function parseArgs (argv: readonly string[]): ParseResult {
                 hex = value;
                 flagsUsed.add('--hex');
                 break;
+            case '--release':
+                release = value;
+                flagsUsed.add('--release');
+                break;
             }
             continue;
         }
@@ -572,8 +591,11 @@ export function parseArgs (argv: readonly string[]): ParseResult {
     if (command === 'write' && input === null) {
         return fail('write needs -i/--in: the settings image to apply');
     }
-    if (command === 'flash' && hex === null) {
-        return fail('flash needs --hex: the Intel HEX firmware image to write');
+    if (command === 'flash' && hex !== null && release !== null) {
+        return fail('flash takes --hex or --release, not both');
+    }
+    if (command === 'flash' && hex === null && release === null) {
+        return fail('flash needs --hex FILE, or --release TAG (see \'ark32 releases\')');
     }
     if (command === 'set' && operands.length === 0) {
         return fail('set needs at least one KEY=VALUE');
@@ -592,12 +614,18 @@ export function parseArgs (argv: readonly string[]): ParseResult {
         if (escsFlagSeen) {
             return fail('--escs only applies to --sim; a real FC reports its own channel count');
         }
-        if (globals.port === null && command !== 'ports') {
+        if (globals.port === null && command !== 'ports' && command !== 'releases') {
             return fail(`${command} needs -p/--port, or --sim to run against the simulator`);
         }
     } else {
         if (globals.port !== null) {
             return fail('--sim and -p/--port are mutually exclusive');
+        }
+        if (release !== null) {
+            // Not a capability gap: the simulated run is driven on a virtual
+            // clock, and a real network await under a virtual clock deadlocks
+            // rather than waits. Downloading first keeps --sim offline and fast.
+            return fail('--release needs the network and --sim runs offline; download the asset and flash it with --hex');
         }
         // Checked after the loop because --escs may follow --fault on the command
         // line. A knob aimed at a channel the rig does not have would otherwise be
@@ -620,6 +648,7 @@ export function parseArgs (argv: readonly string[]): ParseResult {
         out,
         input,
         hex,
+        release,
         verify,
         allowMcuMismatch,
         operands

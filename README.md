@@ -7,10 +7,13 @@ Web UI and headless CLI for configuring and flashing [ARK32](https://github.com/
 ```bash
 git clone git@github.com:ARK-Electronics/ark32-configurator.git
 cd ark32-configurator
-./run.sh
+./run.sh          # web UI at http://localhost:3067 (Chrome/Edge; Web Serial)
+./install-cli.sh  # put `ark32` on PATH (~/.local/bin)
 ```
 
-Installs deps if needed (Node 22, Yarn 4 via corepack), starts the dev server, and opens a browser at http://localhost:3067. Web Serial requires Chrome or Edge. No database, Redis or MinIO needed — the firmware catalog falls back to GitHub Releases.
+`./run.sh` installs deps if needed (Node 22, Yarn 4 via corepack), starts the dev server, and opens a browser. No database, Redis or MinIO needed — the firmware catalog falls back to GitHub Releases.
+
+`./install-cli.sh` builds the headless CLI (required — it is an esbuild bundle) and symlinks it to `~/.local/bin/ark32`. Re-run after pulling, or just `yarn build:cli` to refresh the bundle the symlink already points at.
 
 ## What's different from upstream
 
@@ -27,13 +30,15 @@ The fork was rebuilt around a single protocol core in July 2026 — issue #3 has
 ## The `ark32` CLI
 
 ```bash
-yarn build:cli && yarn install    # → node_modules/.bin/ark32
+./install-cli.sh                                  # build + symlink onto PATH
 ark32 ports
 ark32 -p /dev/ttyACM0 enumerate
 ark32 -p /dev/ttyACM0 read --esc all -o backup/
 ark32 -p /dev/ttyACM0 set --esc 1 TIMING_ADVANCE=16
-ark32 --sim --fc betaflight --escs 2 -v info    # no hardware needed
+ark32 --sim --fc betaflight --escs 2 -v info      # no hardware needed
 ```
+
+The CLI **does** need a build step (`yarn build:cli` / `./install-cli.sh`): `am32-core`, `am32-node` and `am32-sim` are inlined into one file; only the native `serialport` module stays external and is loaded from this checkout's `node_modules`. The web app has no equivalent build for the protocol stack — Nuxt consumes the TypeScript source directly.
 
 Exit codes: 0 success, 1 partial, 2 connect failure, 3 bad arguments. `--json` puts exactly one JSON object on stdout. Release builds produce standalone binaries for Linux, macOS and Windows plus an npm package (`@ark/am32-cli`).
 

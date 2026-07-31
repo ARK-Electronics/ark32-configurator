@@ -12,13 +12,18 @@ the audit trail; `docs/TESTING.md` explains how the stack is tested.
 
 - `./run.sh` — start the dev server and open a browser. Works with no MariaDB,
   MinIO or Redis running. Use this, not `yarn dev`.
+- `./install-cli.sh` — build the `ark32` CLI and symlink it to
+  `~/.local/bin/ark32` (override with `--prefix`). Peer of `./run.sh` for the
+  headless path. Re-run after pulling, or `yarn build:cli` alone to refresh the
+  bundle the symlink already points at.
 - `yarn verify` — the gate. Runs `lint`, `typecheck` (core + app), `test`. Must
   exit 0 before anything lands.
 - `yarn test` / `yarn test:watch` — vitest over `packages/**`.
 - `yarn typecheck:core` — the DOM/Node exclusion check (see below).
-- `yarn build:cli` — bundle the `ark32` CLI into `packages/am32-cli/dist/`. Run
-  `yarn install` once afterwards to get `node_modules/.bin/ark32`. Not part of
-  `yarn verify`; `bash scripts/assert-cli-sim.sh` is the gate that covers it.
+- `yarn build:cli` — bundle the `ark32` CLI into `packages/am32-cli/dist/`. The
+  CLI is the only package that needs a build step (esbuild inlines the
+  workspace packages; `serialport` stays external). Not part of `yarn verify`;
+  `bash scripts/assert-cli-sim.sh` is the gate that covers it.
 - `ark32 --sim <command>` — drive the whole protocol stack with no hardware. The
   fastest way to reproduce a protocol failure or see a session's log lines.
 - Yarn 4 only. Never `npm install`. Node 22 (`.nvmrc`).

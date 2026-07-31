@@ -579,12 +579,15 @@ describe('Am32Session.writeSettings: read-back verification', () => {
         expect(Array.from(esc.eeprom)).toEqual(Array.from(expected));
     });
 
-    it('does not answer a failed verify read by writing again', async () => {
-        // The retry is for a mismatch, not for a broken exchange. A read that fails
-        // is a channel that has stopped answering -- the link has already retried it
-        // ten times with a drain -- and re-erasing the settings page on the off
-        // chance is the last thing to do about it. So the write happens once and the
-        // read's own reason survives.
+    it('answers a failed verify read by re-initialising the channel, bounded by the page attempts', async () => {
+        // A verify read that fails as an exchange used to be fatal on the spot:
+        // "a channel that has stopped answering". Issue #10 found that channel on
+        // hardware -- an ESC that dropped out of its bootloader mid-write and
+        // came back one deaf cycle later -- so the failure is now the
+        // channel-lost flavour of RetryablePageFailure: re-init, rewrite, and
+        // only after the page attempts run out does the read's own reason
+        // surface. Here the reads never recover, so all four attempts burn and
+        // the original failure survives unchanged.
         const h = await inPassthrough();
         const esc = firstEsc(h);
 
@@ -604,10 +607,13 @@ describe('Am32Session.writeSettings: read-back verification', () => {
         // first, so it answers a non-OK ACK, which the ACK check catches before the
         // short-reply check. `esc-read` is the ArduPilot `ACK_OK`-with-one-byte case
         // (block 4's design decision 3). What matters here is that it is not
-        // `esc-verify` and that it happened once.
+        // `esc-verify`, and that the retries were page-bounded: four writes
+        // (PAGE_WRITE_ATTEMPTS) with a re-init before each rewrite.
         expect(failure?.reason).toBe('esc-command');
         expect(failure?.target).toBe(0);
-        expect(esc.counts.write).toBe(1);
+        expect(esc.counts.write).toBe(4);
+        expect(esc.counts.connect).toBe(4);
+        expect(h.logs.some(line => line.includes('re-initialising the channel'))).toBe(true);
     });
 
     it('skips the read-back when the caller asks it to', async () => {
@@ -910,6 +916,77 @@ describe('Am32Session.applyDefaults', () => {
 
         await expect(drive(h.clock, h.session.applyDefaults(0)))
             .rejects.toMatchObject({ name: 'SessionError', reason: 'esc-verify', target: 0 });
+    });
+});
+
+describe('fault knob: esc[n].bootloaderDropout -- a channel lost mid-write is re-inited (issue #10)', () => {
+    it('re-inits the channel and finishes the flash', async () => {
+        // The hardware shape: mid-flash the ESC drops out of its bootloader, so
+        // every remaining write and verify read fails as an exchange -- not a
+        // mismatch. Before #10 that propagated as fatal ("a channel that has
+        // stopped talking"); now the page loop re-runs cmd_DeviceInitFlash and
+        // rewrites the failing page.
+        const mcu = new Mcu(0x1F06);
+        const h = await inPassthrough();
+        const esc = firstEsc(h);
+
+        const connectsBefore = esc.counts.connect;
+        // Fires mid-image, inside a page: writes are 3 operations per chunk.
+        esc.bootloaderDropout = 40;
+
+        const info = await drive(h.clock, h.session.flash(0, firmwareHex()));
+
+        // The recovery re-init, on top of the flash's own post-reset read-back.
+        expect(esc.counts.connect).toBeGreaterThanOrEqual(connectsBefore + 2);
+        expect(esc.bootloaderDropout).toBe(false);
+        expect(Array.from(esc.peek(mcu.getFirmwareStart(), 512)))
+            .toEqual(Array.from({ length: 512 }, (_, i) => (i * 7) & 0xFE));
+        expect(esc.eeprom[EepromLayout.BOOT_BYTE.offset]).toBe(0x01);
+        expect(info.settings.BOOT_BYTE).toBe(0x01);
+        expect(h.logs.some(line => line.startsWith('warn:') && line.includes('re-initialising the channel')))
+            .toBe(true);
+    });
+
+    it('recovers a settings write the same way', async () => {
+        const h = await inPassthrough();
+        const esc = firstEsc(h);
+
+        // Dies on the settings page's verify read; the page write itself is
+        // set-address + set-buffer + program.
+        esc.bootloaderDropout = 4;
+
+        const result = await drive(h.clock, h.session.writeSettings(0, { TIMING_ADVANCE: 16 }));
+
+        expect(result.changed).toBe(true);
+        expect(result.verified).toBe(true);
+        expect(esc.eeprom[EepromLayout.TIMING_ADVANCE.offset]).toBe(16);
+        expect(h.logs.some(line => line.includes('re-initialising the channel'))).toBe(true);
+    });
+
+    it('gives up with the write\'s own failure when the channel never comes back', async () => {
+        // The recovery is bounded: one init walk (CHANNEL_RECOVERY_INIT_RETRIES),
+        // then the original failure propagates. A channel that dies mid-write
+        // and stays dead must not burn all four page attempts against a
+        // bootloader that is not there.
+        const h = await inPassthrough();
+        const esc = firstEsc(h);
+
+        let writes = 0;
+        const realProgram = esc.programFlash.bind(esc);
+        (esc as unknown as { programFlash: () => unknown }).programFlash = () => {
+            writes += 1;
+            if (writes === 8) {
+                esc.unresponsive = true;
+            }
+            return realProgram();
+        };
+
+        await expect(drive(h.clock, h.session.flash(0, firmwareHex())))
+            .rejects.toMatchObject({ name: 'SessionError', target: 0 });
+
+        // It tried the re-init road once and took the exit, not the rewrite one.
+        expect(h.logs.some(line => line.includes('re-initialising the channel'))).toBe(true);
+        expect(h.logs.some(line => line.includes('re-writing it from its base'))).toBe(false);
     });
 });
 

@@ -246,6 +246,19 @@ export class SimEsc {
      */
     failingFlashCell: boolean | number = false;
 
+    /**
+     * The bootloader drops off the wire after this many more operations.
+     *
+     * Models the mid-write dropout seen on hardware (issue #10): mid-flash the
+     * ESC left its bootloader for one deaf cycle and every remaining write and
+     * verify read came back `ACK_D_GENERAL_ERROR` -- answered by the flight
+     * controller on the silent ESC's behalf -- until the host ran
+     * `cmd_DeviceInitFlash` again. `true` drops on the very next operation; a
+     * number, after that many more. One-shot: the re-init that recovers the
+     * channel also clears it, so a test can assert the retry succeeded.
+     */
+    bootloaderDropout: boolean | number = false;
+
     /** Set {@link slowMs}. Spelled as a method because the plan's knob is `slowBy(ms)`. */
     slowBy (ms: number): this {
         this.slowMs = Math.max(0, ms);
@@ -418,6 +431,7 @@ export class SimEsc {
      * command entirely. `ADDRESS_MAGIC_CONTINUE` is AM32's own replacement.
      */
     setAddress (address: number): EscResult {
+        this.dropoutTick();
         const duration = this.wire(SET_ADDRESS_BYTES);
         if (this.unresponsive || !this.connected) {
             return this.dead(duration);
@@ -443,6 +457,7 @@ export class SimEsc {
 
     /** `CMD_SET_BUFFER`: stage `data` for the next program command. */
     setBuffer (data: Uint8Array): EscResult {
+        this.dropoutTick();
         const duration = this.wire(SET_BUFFER_HEADER_BYTES + data.length + 2 + 1);
         if (this.unresponsive || !this.connected) {
             return this.dead(duration);
@@ -457,6 +472,7 @@ export class SimEsc {
      * `brERRORCOMMAND`. Resets the address pointer afterwards (BL:667-669).
      */
     read (length: number): EscResult {
+        this.dropoutTick();
         this.counts.read += 1;
         const duration = this.wire(COMMAND_BYTES - 1) + this.wire(length + READ_OVERHEAD_BYTES);
 
@@ -493,6 +509,7 @@ export class SimEsc {
      * answers `brERRORCOMMAND` -- exactly like real flash.
      */
     programFlash (): EscResult {
+        this.dropoutTick();
         this.counts.write += 1;
         const duration = this.wire(COMMAND_BYTES) + PROG_FLASH_MS + this.buffer.length / 16;
 
@@ -541,6 +558,7 @@ export class SimEsc {
      * {@link programFlash}.
      */
     erasePage (): EscResult {
+        this.dropoutTick();
         this.counts.erase += 1;
         const duration = this.wire(COMMAND_BYTES) + PAGE_ERASE_MS;
         if (this.unresponsive || !this.connected) {
@@ -592,6 +610,26 @@ export class SimEsc {
     /** The FC dropped the link -- `setDisconnected`. */
     disconnect (): void {
         this.connected = false;
+    }
+
+    /**
+     * Advance {@link bootloaderDropout} by one operation; when it fires, the
+     * bootloader is gone and the operation that triggered it already answers
+     * dead. Deliberately not called by {@link connect}: `cmd_DeviceInitFlash`
+     * is the recovery, and a knob that also sabotaged it would model an ESC
+     * that can never come back -- that one is {@link unresponsive}.
+     */
+    private dropoutTick (): void {
+        if (this.bootloaderDropout === false) {
+            return;
+        }
+        const remaining = this.bootloaderDropout === true ? 0 : this.bootloaderDropout - 1;
+        if (remaining <= 0) {
+            this.bootloaderDropout = false;
+            this.connected = false;
+        } else {
+            this.bootloaderDropout = remaining;
+        }
     }
 
     // ---- internals ---------------------------------------------------------

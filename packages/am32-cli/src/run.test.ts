@@ -746,6 +746,17 @@ describe('ark32 --fault: every knob reaches the simulator', () => {
         expect(never.code).toBe(EXIT_PARTIAL);
     });
 
+    it('esc[n].bootloaderDropout is re-inited and the page rewritten (issue #10)', async () => {
+        // The hardware shape: mid-flash the channel dies for one deaf cycle and
+        // every remaining exchange fails -- only cmd_DeviceInitFlash brings it
+        // back, and the page loop now runs it before rewriting.
+        const recovered = await cli([
+            '--sim', '--escs', '1', '--fault', 'esc1=bootloaderDropout:40',
+            'flash', '--esc', '1', '--hex', 'fw.hex'
+        ], { files: { 'fw.hex': firmwareHex() } });
+        expect(recovered.code).toBe(EXIT_OK);
+    });
+
     it('fc.mavlinkIdleGate opens and shuts the ArduPilot window', async () => {
         const open = await cli(['--sim', '--escs', '1', '--fault', 'fc=mavlinkIdleGate:0', '-v', 'info']);
         expect(open.code).toBe(EXIT_OK);

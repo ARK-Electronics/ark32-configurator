@@ -182,7 +182,8 @@ export const KNOB_VALUE_KINDS = {
         corruptCrc: 'count',
         shortRead: 'count',
         silentWriteFailure: 'count',
-        failingFlashCell: 'count'
+        failingFlashCell: 'count',
+        bootloaderDropout: 'count'
     },
     fc: {
         blockingFourWay: 'flag',
@@ -248,7 +249,7 @@ if the anonymous GitHub rate limit bites.
 Fault specs (--sim only)
   escN=unresponsive            escN=slowBy:MS           escN=corruptCrc[:COUNT]
   escN=shortRead[:BYTES]       escN=silentWriteFailure[:COUNT]
-  escN=failingFlashCell[:COUNT]
+  escN=failingFlashCell[:COUNT]  escN=bootloaderDropout[:AFTER_N_OPS]
   fc=blockingFourWay           fc=mavlinkIdleGate:MS    fc=mspError:COMMAND
   link=dropBytes:COUNT         link=injectGarbage:COUNT
 

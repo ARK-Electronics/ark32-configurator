@@ -317,13 +317,31 @@ const PAGE_WRITE_ATTEMPTS = 4;
  * *where* a failure came from decides whether to write again -- rather than a
  * predicate over error reasons, which cannot tell a rejected write from a rejected
  * read (both are `esc-command` with an ACK) and so cannot answer the question.
+ *
+ * `channelLost` marks the second repairable flavour (issue #10): the write's
+ * *verify read* failed as an exchange too, meaning the channel itself went
+ * away mid-write rather than the page being bad. The rewrite can only succeed
+ * after `cmd_DeviceInitFlash` brings the bootloader back, so the loops re-init
+ * before this flavour's retry.
  */
 class RetryablePageFailure extends Error {
-    constructor (readonly failure: unknown) {
+    constructor (readonly failure: unknown, readonly channelLost = false) {
         super(describeError(failure));
         this.name = 'RetryablePageFailure';
     }
 }
+
+/**
+ * Init-flash attempts when a channel vanishes mid-write.
+ *
+ * Four walks the ladder across one full deaf cycle of a bounced ESC -- delays
+ * of 300, 3600 and 300 ms bracket the startup tune plus the 2.0 s signal-loss
+ * watchdog (see `FOUR_WAY_INIT_RETRY_DELAYS_MS`) -- while keeping the cost on
+ * a channel that is truly gone to a single bounded walk, after which the
+ * write's own failure propagates. Ten attempts here would spend ~13 s per page
+ * attempt on a pulled wire for no possible gain.
+ */
+const CHANNEL_RECOVERY_INIT_RETRIES = 4;
 
 /**
  * True when the ESC answered and said no, as against not answering.
@@ -856,6 +874,7 @@ export class Am32Session {
 
             this.emitter.emit('progress', { phase: 'write', current: 0, total: 1, target });
             const written = await this.writeSettingsPage(
+                target,
                 eepromOffset,
                 image,
                 `ESC #${target + 1}: the settings page`,
@@ -899,6 +918,7 @@ export class Am32Session {
      * `:1211` is `imATM_BLB` only).
      */
     private async writeSettingsPage (
+        target: number,
         eepromOffset: number,
         image: Uint8Array,
         what: string,
@@ -918,12 +938,46 @@ export class Am32Session {
                 if (attempt >= PAGE_WRITE_ATTEMPTS) {
                     throw error.failure;
                 }
+                if (error.channelLost) {
+                    await this.reconnectLostChannel(target, error, what, attempt);
+                    continue;
+                }
                 this.emitter.emit('log', {
                     level: 'warn',
                     message: `${what} did not verify; writing it again ` +
                         `(attempt ${attempt + 1} of ${PAGE_WRITE_ATTEMPTS})`
                 });
             }
+        }
+    }
+
+    /**
+     * Bring back a channel that stopped answering mid-write, or give up with
+     * the write's own failure.
+     *
+     * The rewrite the caller is about to do cannot succeed while the
+     * bootloader is gone, and the retry traffic itself is what keeps a bounced
+     * ESC's application alive -- so this leans on `cmd_DeviceInitFlash`'s
+     * quiet-gap ladder, whose silences let the ESC starve back into its
+     * bootloader (see `FOUR_WAY_INIT_RETRY_DELAYS_MS`).
+     */
+    private async reconnectLostChannel (
+        target: number,
+        error: RetryablePageFailure,
+        what: string,
+        attempt: number
+    ): Promise<void> {
+        this.emitter.emit('log', {
+            level: 'warn',
+            message: `${what}: the channel stopped answering mid-write; re-initialising the channel ` +
+                `and rewriting the page (attempt ${attempt + 1} of ${PAGE_WRITE_ATTEMPTS})`
+        });
+        try {
+            await this.fourWay.initFlash(target, CHANNEL_RECOVERY_INIT_RETRIES);
+        } catch {
+            // The channel did not come back: the original write failure is the
+            // one that names what actually went wrong.
+            throw error.failure;
         }
     }
 
@@ -978,9 +1032,13 @@ export class Am32Session {
             if (isVerifyMismatch(error)) {
                 throw new RetryablePageFailure(rejected ?? error);
             }
-            // The read failed as well, so this is not a page that can be repaired --
-            // it is a channel that has stopped talking. Report the first failure.
-            throw rejected ?? error;
+            // The read failed as well: the channel itself has stopped talking,
+            // not just the page. Seen on hardware mid-flash (issue #10) -- the
+            // ESC dropped out of its bootloader for one deaf cycle and every
+            // remaining exchange came back ACK_D_GENERAL_ERROR. Repairable,
+            // but only after a re-init, which is what `channelLost` tells the
+            // page loops to do before they rewrite.
+            throw new RetryablePageFailure(rejected ?? error, true);
         }
 
         if (rejected) {
@@ -1151,6 +1209,7 @@ export class Am32Session {
         const image = new Uint8Array(settingsImage);
         image[EepromLayout.BOOT_BYTE.offset] = value;
         await this.writeSettingsPage(
+            target,
             eepromOffset,
             image,
             `ESC #${target + 1}: the boot byte (0x${value.toString(16).padStart(2, '0')})`,
@@ -1229,6 +1288,15 @@ export class Am32Session {
                     }
                     if (attempt >= PAGE_WRITE_ATTEMPTS) {
                         throw error.failure;
+                    }
+                    if (error.channelLost) {
+                        await this.reconnectLostChannel(
+                            target,
+                            error,
+                            `ESC #${target + 1}: the page at 0x${pageBase.toString(16).toUpperCase()}`,
+                            attempt
+                        );
+                        continue;
                     }
                     this.emitter.emit('log', {
                         level: 'warn',

@@ -273,6 +273,13 @@ describe('parseArgs: --fault', () => {
             .toContain('takes true or false');
     });
 
+    it('parses bootloaderDropout bare and counted', () => {
+        expect(ok(['--sim', '--fault', 'esc1=bootloaderDropout', 'enumerate']).globals.faults[0])
+            .toMatchObject({ scope: 'esc', target: 0, knob: 'bootloaderDropout', value: true });
+        expect(ok(['--sim', '--fault', 'esc1=bootloaderDropout:40', 'enumerate']).globals.faults[0])
+            .toMatchObject({ knob: 'bootloaderDropout', value: 40 });
+    });
+
     it('rejects an unknown subject or knob, and lists the knobs it knows', () => {
         expect(why(['--sim', '--fault', 'motor1=unresponsive', 'enumerate']))
             .toContain('subject must be escN, fc or link');

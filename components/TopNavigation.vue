@@ -32,7 +32,7 @@
 <script setup lang="ts">
 // const route = useRoute();
 const links = computed(() => [{
-    label: 'AM32',
+    label: 'ARK32',
     icon: 'i-heroicons-home',
     to: '/'
 }, {

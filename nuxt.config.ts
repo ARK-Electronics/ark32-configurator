@@ -98,13 +98,13 @@ export default defineNuxtConfig({
         registerType: 'autoUpdate',
         manifest: {
             id: '/',
-            name: 'AM32 configurator',
-            short_name: 'AM32CONF',
+            name: 'ARK32 configurator',
+            short_name: 'ARK32CONF',
             theme_color: '#000000',
-            description: 'Configurator for the ESC firmware AM32',
+            description: 'Configurator for the ESC firmware ARK32',
             icons: [
                 {
-                    src: 'assets/images/am32-logo.png',
+                    src: 'assets/images/ark32-logo.png',
                     sizes: '848x848',
                     type: 'image/png'
                 },

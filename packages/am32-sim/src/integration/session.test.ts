@@ -627,6 +627,65 @@ describe('lifecycle', () => {
         expect(h.fc.inPassthrough).toBe(false);
     });
 
+    it('gives every bootloader it brought up back to its firmware on exit', async () => {
+        const h = rig({ profile: 'betaflight', escCount: 4 });
+
+        await drive(h.clock, h.session.connect());
+        await drive(h.clock, h.session.enumerate());
+
+        // Enumerate brought four bootloaders up and reset none of them.
+        expect(h.escs.every(esc => esc.isConnected)).toBe(true);
+
+        const before = h.clock.now();
+        await drive(h.clock, h.session.exitPassthrough());
+
+        // One cmd_DeviceReset each, before cmd_InterfaceExit: the FC drives
+        // the motor lines again the moment passthrough ends, and a bootloader
+        // left up (v17 and older, no DShot detection) wedges on that stream --
+        // the next session's init-flash then fails with ACK_D_GENERAL_ERROR
+        // until the ESC is power-cycled.
+        expect(h.escs.map(esc => esc.counts.reset)).toEqual([1, 1, 1, 1]);
+        expect(h.escs.every(esc => !esc.isConnected)).toBe(true);
+        // The rebootEsc variant: Betaflight holds each ESC's line low for
+        // 300 ms, which is what walks even a desynced bootloader out to the
+        // app. Four ESCs means at least 1.2 s of virtual time spent here.
+        expect(h.clock.now() - before).toBeGreaterThanOrEqual(4 * 300);
+    });
+
+    it('resets every channel the FC reports on exit, touched or not', async () => {
+        const h = rig({ profile: 'betaflight', escCount: 4 });
+
+        await drive(h.clock, h.session.connect());
+        await drive(h.clock, h.session.enterPassthrough());
+        // Address one channel only, the way `ark32 get --esc 2` does.
+        await drive(h.clock, h.session.readEsc(1));
+
+        await drive(h.clock, h.session.disconnect());
+
+        // All four, not just the addressed one: entering passthrough starved
+        // the DShot stream for every ESC, so ~2 s in each one's signal-loss
+        // watchdog put it in its bootloader whether or not it was spoken to.
+        // Exiting without resetting the other three stranded them there --
+        // seen on hardware as single-ESC reads wedging the unaddressed ESCs.
+        expect(h.escs.map(esc => esc.counts.reset)).toEqual([1, 1, 1, 1]);
+    });
+
+    it('still resets a channel whose bootloader never answered', async () => {
+        const h = rig({ profile: 'betaflight', escCount: 4 });
+        (h.escs[2] as { unresponsive: boolean }).unresponsive = true;
+
+        await drive(h.clock, h.session.connect());
+        const results = await drive(h.clock, h.session.enumerate());
+        expect(okTargets(results)).toEqual([0, 1, 3]);
+
+        await drive(h.clock, h.session.disconnect());
+
+        // The restart is fire-and-forget bytes; an absent or dead ESC ignores
+        // them and the FC answers ACK_OK either way, so there is no cheaper
+        // safe choice than sending it.
+        expect(h.escs.map(esc => esc.counts.reset)).toEqual([1, 1, 1, 1]);
+    });
+
     it('stops reporting a channel count once passthrough is left', async () => {
         const h = rig({ profile: 'betaflight', escCount: 4 });
         await drive(h.clock, h.session.connect());

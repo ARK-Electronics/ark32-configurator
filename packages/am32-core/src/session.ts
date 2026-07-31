@@ -214,12 +214,19 @@ export interface Am32SessionOptions {
     /**
      * Settle after `MSP_SET_PASSTHROUGH` before the first soft-serial command.
      *
-     * Carried over from the app unchanged, which is the conservative choice: it
-     * is a number real hardware is known to work with and no hardware checkpoint
-     * has run since. Betaflight's `esc4wayInit` calls `motorDisable()` and
-     * reconfigures the motor pins as inputs (serial_4way.c:141-152), and
-     * ArduPilot's `MSP_SET_PASSTHROUGH` declares `EXPECT_DELAY_MS(1000)` for
-     * `serial_setup_output` (AP_BLHeli.cpp:592). Free under a virtual clock.
+     * The number is set by the *ESC*, not the FC. An AM32 application has no
+     * boot-init detector; the only road to its bootloader is the unarmed
+     * signal-loss watchdog, exactly 2.0 s after passthrough starves the DShot
+     * stream (`Src/faults.c:83-108`, 40000 ticks at 20 kHz). The app's 2000 ms
+     * inherited from the web app sat precisely on that boundary, so the first
+     * init-flash raced the ESC's own reset -- and an attempt whose TX landed in
+     * the bootloader's ~55 ms boot window bounced it back to the app
+     * (bootloader v15 jumps on any float-phase low, `main.c:884`), after which
+     * the retry traffic itself kept re-arming the app's input detection so it
+     * never starved again. Seen on hardware as ~30% of single-ESC commands
+     * failing all ten init attempts. 2500 ms waits the reset out: by the first
+     * TX the bootloader is resident, listening, and alone on the line. Free
+     * under a virtual clock.
      */
     passthroughSettleMs?: number;
 
@@ -235,7 +242,7 @@ export interface Am32SessionOptions {
     baudRate?: number;
 }
 
-const DEFAULT_PASSTHROUGH_SETTLE_MS = 2000;
+const DEFAULT_PASSTHROUGH_SETTLE_MS = 2500;
 const DEFAULT_INTER_ESC_DELAY_MS = 300;
 const DEFAULT_BAUD_RATE = 115200;
 
@@ -555,6 +562,29 @@ export class Am32Session {
         if (!this.inPassthrough) {
             return;
         }
+
+        // Every channel the FC reports, not only the ones this session
+        // touched. Entering passthrough starves the DShot stream for all of
+        // them, and ~2 s in each ESC's unarmed signal-loss watchdog resets it
+        // into a bootloader that sits resident on the idle-high line (AM32
+        // `Src/faults.c:83-108`) -- whether or not the session ever addressed
+        // that channel. Leave one there and the FC's resumed DShot lands in
+        // its bootloader, which v17-and-older wedge on; seen on hardware as
+        // `get --esc 2` reliably stranding ESCs 1, 3 and 4. Best-effort and
+        // per-channel; `rebootEsc` because on Betaflight the 300 ms line hold
+        // walks even a desynced bootloader out to the app, and a channel still
+        // running its firmware just discards the bytes.
+        for (let target = 0; target < this.escCountValue; target += 1) {
+            try {
+                await this.fourWay.reset(target, { rebootEsc: true });
+            } catch (error) {
+                this.emitter.emit('log', {
+                    level: 'warn',
+                    message: `ESC #${target + 1}: cmd_DeviceReset on the way out failed: ${describeError(error)}`
+                });
+            }
+        }
+
         await this.fourWay.exit();
         // The count belonged to that passthrough session. Keeping it would leave
         // `escCount` reporting channels nobody can address, against what the
@@ -1247,7 +1277,11 @@ export class Am32Session {
     private async resetImpl (target: number): Promise<void> {
         this.requirePassthrough();
         this.emitter.emit('progress', { phase: 'reset', current: 0, total: 1, target });
-        await this.fourWay.reset(target);
+        // The user-facing "leave the bootloader" -- rebootEsc so it works even
+        // on a bootloader whose serial parser is past talking to (see
+        // FourWaySession.reset). The mid-flash reset deliberately does not use
+        // it: its read-back re-connects immediately and verifies itself.
+        await this.fourWay.reset(target, { rebootEsc: true });
         this.emitter.emit('progress', { phase: 'reset', current: 1, total: 1, target });
     }
 

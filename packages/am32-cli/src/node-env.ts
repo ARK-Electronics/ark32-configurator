@@ -17,6 +17,7 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { SessionError, describeError } from 'am32-core/errors';
+import { DEFAULT_FIRMWARE_OWNER, DEFAULT_FIRMWARE_REPO } from 'am32-core/releases';
 import type { Transport } from 'am32-core/transport';
 import { listSerialPorts, openNodeTransport } from 'am32-node';
 import type { NodePortInfo } from 'am32-node/serialport-types';
@@ -90,6 +91,17 @@ export function createNodeEnv (): CliEnv {
             } catch (error) {
                 throw new SessionError('transport', describeError(error), { cause: error });
             }
+        },
+
+        httpGet: async (url, headers) => {
+            const response = await fetch(url, { headers, redirect: 'follow' });
+            return { status: response.status, body: await response.text() };
+        },
+
+        firmware: {
+            owner: process.env.GITHUB_FIRMWARE_OWNER || DEFAULT_FIRMWARE_OWNER,
+            repo: process.env.GITHUB_FIRMWARE_REPO || DEFAULT_FIRMWARE_REPO,
+            token: process.env.GITHUB_TOKEN || process.env.GH_TOKEN || null
         },
 
         version: VERSION

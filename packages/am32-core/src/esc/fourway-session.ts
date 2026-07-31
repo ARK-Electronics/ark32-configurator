@@ -49,6 +49,35 @@ export const FOUR_WAY_DEFAULT_RETRIES = 10;
 /** `cmd_DeviceInitFlash` is the flaky one -- it is the ESC entering its bootloader. */
 export const FOUR_WAY_INIT_RETRIES = 10;
 
+/**
+ * The retry ladder for `cmd_DeviceInitFlash`: quick, SILENT, quick, quick,
+ * SILENT, ... The long rungs are the load-bearing part, and they are
+ * deliberate silences, not backoff.
+ *
+ * The AM32 *application* has no boot-init detector at all: the only road from
+ * a running app to the bootloader is its unarmed signal-loss watchdog, 2.0 s
+ * after the line goes quiet (AM32 `Src/faults.c:83-108`). Two consequences,
+ * both seen on an ARK 4in1 with the factory v15 bootloader behind Betaflight:
+ *
+ *  - An init attempt whose TX lands in the freshly-reset bootloader's ~55 ms
+ *    boot window bounces the ESC back to its app -- v15's float phase jumps on
+ *    any low, software reset or not (`main.c:884`).
+ *  - Once the app is running, *our own retries are what keep it alive*: the
+ *    edges re-arm its input detection and the detect tones keep zeroing the
+ *    signal-loss counter, so any steady retry cadence -- fixed or growing --
+ *    fails every remaining attempt. The storm sustains the blindness it is
+ *    trying to break.
+ *
+ * So the ladder goes silent for 3.6 s every third attempt: startup tune
+ * (~1.4 s, tones hold the counter) + the 2.0 s watchdog + boot margin. A
+ * bounced ESC starves in that silence, resets, and the next attempt finds its
+ * bootloader resident and alone on the line. The quick rungs cover the common
+ * cases -- already in the bootloader, or reset completed between attempts --
+ * and cost nothing when the ESC answers first time.
+ */
+export const FOUR_WAY_INIT_RETRY_DELAYS_MS: readonly number[] =
+    [300, 3600, 300, 300, 3600, 300, 300, 3600, 300];
+
 export interface FourWaySessionOptions {
     link: Link;
     policy?: TimeoutPolicy;
@@ -62,6 +91,8 @@ export interface FourWayCommandOptions {
     address?: number;
     /** Total attempts. Defaults to the session's. */
     retries?: number;
+    /** Per-retry delay ladder. See {@link FOUR_WAY_INIT_RETRY_DELAYS_MS}. */
+    retryDelaysMs?: readonly number[];
     /**
      * Bytes the *ESC* moves, which is what the timeout scales with: the
      * requested count for a read, the written length for a write. Not the 4-way
@@ -111,6 +142,7 @@ export class FourWaySession {
                     probe: isCompleteFourWayFrame,
                     timeout: this.policy.forFourWay(command, options.payloadBytes ?? params.length),
                     retries: options.retries ?? this.retries,
+                    retryDelaysMs: options.retryDelaysMs,
                     label,
                     validate: (response) => {
                         const decoded = parseFourWayResponse(response);
@@ -199,7 +231,8 @@ export class FourWaySession {
     initFlash (target: number, retries?: number): Promise<FourWayResponse> {
         return this.command(FOUR_WAY_COMMANDS.cmd_DeviceInitFlash, {
             params: [target],
-            retries: retries ?? this.initRetries
+            retries: retries ?? this.initRetries,
+            retryDelaysMs: FOUR_WAY_INIT_RETRY_DELAYS_MS
         });
     }
 
@@ -298,9 +331,25 @@ export class FourWaySession {
         return actual;
     }
 
-    /** `cmd_DeviceReset` -- run the application again on `target`. */
-    async reset (target: number): Promise<void> {
-        await this.command(FOUR_WAY_COMMANDS.cmd_DeviceReset, { params: [target] });
+    /**
+     * `cmd_DeviceReset` -- run the application again on `target`.
+     *
+     * `rebootEsc` sets the request's address low byte to 1, which Betaflight
+     * honours by driving the ESC's signal line LOW for 300 ms after the
+     * restart command (serial_4way.c:588,604-611). That low hold is what makes
+     * the reset *unconditional*: the AM32 bootloader leaves for the app after
+     * 20 ms of continuous low (`invalid_command = 101`, bootloader
+     * main.c:432 in v15, :718-724 in v18) even when its serial parser is
+     * desynced and the restart command itself arrived as garbage. ArduPilot
+     * ignores the address bytes entirely (AP_BLHeli.cpp:1030-1051), so the
+     * flag costs nothing there. The 300 ms is already in the reset budget
+     * (`DEVICE_RESET_MS` in the timeout policy).
+     */
+    async reset (target: number, options: { rebootEsc?: boolean } = {}): Promise<void> {
+        await this.command(FOUR_WAY_COMMANDS.cmd_DeviceReset, {
+            params: [target],
+            address: options.rebootEsc ? 1 : 0
+        });
     }
 
     /** True if the selected channel's bootloader is still answering. */

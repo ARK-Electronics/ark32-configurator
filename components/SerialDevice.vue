@@ -359,6 +359,7 @@
 </template>
 
 <script setup lang="ts">
+import { findFirmwareAsset } from 'am32-core/releases';
 import db from '~/src/db';
 
 /**
@@ -469,10 +470,16 @@ const toggleSavingOrApplyingSelectedEsc = (n: number) => {
 
 watchEffect(() => {
     if (assets.value && escStore.escData.length > 0) {
-        const tag = selectedRelease.value;
-        const cleanTag = tag.substring(1).replace(/-rc[1-9]*[0-9]*/gi, '');
-        const currentAsset = assets.value?.find(a => a === `AM32_${escStore.firstValidEscData?.data.meta.am32.fileName ?? 'ERROR'}_${cleanTag}.hex`);
-        selectedAsset.value = currentAsset ?? 'NOT FOUND';
+        // Matched on the asset-name prefix, not on a name rebuilt from the
+        // tag: the rolling `nightly` prerelease carries version-named assets
+        // (`AM32_ARK_4IN1_F051_3.0-ark.hex`), so tag-derived exact names come
+        // out as NOT FOUND for every board. Shared with `ark32 flash
+        // --release` via am32-core/releases.
+        const fileName = escStore.firstValidEscData?.data.meta.am32.fileName;
+        const match = fileName
+            ? findFirmwareAsset(assets.value.map(name => ({ name })), fileName)
+            : null;
+        selectedAsset.value = match?.name ?? 'NOT FOUND';
     }
 });
 

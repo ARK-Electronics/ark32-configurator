@@ -589,12 +589,13 @@ export class SimFc implements SimEndpoint {
 
         case FOUR_WAY_COMMANDS.cmd_InterfaceExit:
             // Both reply first and leave passthrough afterwards
-            // (BF:562,923-926; AP:1014-1027).
+            // (BF:562,923-926; AP:1014-1027). Neither touches the ESCs on the
+            // way out: a bootloader the host brought up stays up, exposed to
+            // whatever the FC then drives on the motor lines. Getting back to
+            // the firmware is the host's job (`cmd_DeviceReset`) -- modelling
+            // an implicit reset here is what hid the host forgetting to.
             send([0], FOUR_WAY_ACK.ACK_OK);
             this.mode = 'msp';
-            for (const each of this.escs) {
-                each.disconnect();
-            }
             return;
 
         case FOUR_WAY_COMMANDS.cmd_InterfaceSetMode:

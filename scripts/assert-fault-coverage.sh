@@ -29,6 +29,12 @@ KNOBS=(
     # is a knob that has stopped working.
     silentWriteFailure  # A,C -- a write must be proven, not assumed
     failingFlashCell    # C  -- a rejected chunk must be repaired at the page base
+    # Not in the plan's table either. Added for issue #10, found on hardware
+    # after block 7: mid-flash the ESC dropped out of its bootloader and every
+    # remaining exchange failed, so the page loops must re-init the channel
+    # before rewriting rather than burning their attempts against a bootloader
+    # that is not there.
+    bootloaderDropout   # #10 -- a channel lost mid-write is re-inited, then rewritten
 )
 
 # The test-side check looks for a suite *named after* the knob -- the plan's

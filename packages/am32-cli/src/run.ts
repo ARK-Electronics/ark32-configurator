@@ -55,7 +55,13 @@ import {
     type Assignment,
     type ReadFile
 } from './commands/settings';
-import { commandFlash, commandReset } from './commands/firmware';
+import { commandFlash, commandFlashRelease, commandReset } from './commands/firmware';
+import {
+    CatalogError,
+    commandReleases,
+    fetchFirmwareReleases,
+    type FirmwareRelease
+} from './commands/releases';
 
 /** Commands that need 4-way passthrough. `info` deliberately does not. */
 const NEEDS_PASSTHROUGH = new Set(['enumerate', 'read', 'write', 'get', 'set', 'defaults', 'flash', 'reset']);
@@ -112,6 +118,12 @@ export async function run (argv: readonly string[], env: CliEnv): Promise<ExitCo
         if (error instanceof UsageError) {
             return reporter.usage(parsed.command, error.message, EXIT_USAGE);
         }
+        if (error instanceof CatalogError) {
+            // The release catalog was unreachable or unusable: like an
+            // unreachable FC, nothing was learned and nothing was attempted on
+            // any ESC, so it is exit 2 rather than a partial.
+            return reporter.fail(parsed.command, error, EXIT_CONNECT);
+        }
         return reporter.fail(parsed.command, error, exitCodeForError(error));
     }
 }
@@ -120,6 +132,9 @@ async function dispatch (args: ParsedArgs, env: CliEnv, reporter: Reporter): Pro
     if (args.command === 'ports') {
         return reporter.finish('ports', await commandPorts(env, args.globals.sim));
     }
+    if (args.command === 'releases') {
+        return reporter.finish('releases', await commandReleases(env));
+    }
 
     // Pre-flight: everything that can be rejected without opening anything.
     const assignments = args.command === 'set' ? parseAssignments(args.operands) : [];
@@ -127,7 +142,13 @@ async function dispatch (args: ParsedArgs, env: CliEnv, reporter: Reporter): Pro
         checkKeys(args.operands);
     }
     const settingsImage = args.command === 'write' ? await readSettingsImage(args, env) : null;
-    const hex = args.command === 'flash' ? await readHex(args, env) : null;
+    const hex = args.command === 'flash' && args.hex !== null ? await readHex(args, env) : null;
+    // Resolved before the port opens: an unknown tag or an unreachable catalog
+    // must not cost a connect and a passthrough. Which *asset* each ESC gets is
+    // decided per channel, against the firmware name the ESC itself reports.
+    const release = args.command === 'flash' && args.release !== null
+        ? await resolveRelease(args.release, env)
+        : null;
 
     return withRig(args, env, reporter, async (rig) => {
         // The two commands that address the FC rather than a channel, so neither
@@ -177,6 +198,12 @@ async function dispatch (args: ParsedArgs, env: CliEnv, reporter: Reporter): Pro
                 rig.session, selector, rig.escCount, args.verify, reporter
             ));
         case 'flash':
+            if (release !== null) {
+                return reporter.finish('flash', await commandFlashRelease(
+                    rig.session, selector, rig.escCount, release, env,
+                    { allowMcuMismatch: args.allowMcuMismatch, verify: args.verify }
+                ));
+            }
             return reporter.finish('flash', await commandFlash(
                 rig.session, selector, rig.escCount, hex as string,
                 { allowMcuMismatch: args.allowMcuMismatch, verify: args.verify }
@@ -227,6 +254,19 @@ async function readSettingsImage (args: ParsedArgs, env: CliEnv): Promise<Uint8A
         throw new UsageError(problem);
     }
     return bytes;
+}
+
+async function resolveRelease (tag: string, env: CliEnv): Promise<FirmwareRelease> {
+    const releases = await fetchFirmwareReleases(env);
+    const release = releases.find(candidate => candidate.tag === tag);
+    if (!release) {
+        const known = releases.map(candidate => candidate.tag).join(', ');
+        throw new UsageError(
+            `${env.firmware.owner}/${env.firmware.repo} has no release tagged '${tag}'. ` +
+            (known ? `It has: ${known}` : 'It has no releases at all.')
+        );
+    }
+    return release;
 }
 
 async function readHex (args: ParsedArgs, env: CliEnv): Promise<string> {

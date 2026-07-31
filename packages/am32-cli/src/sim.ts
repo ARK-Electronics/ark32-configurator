@@ -98,6 +98,9 @@ function applyFault (harness: SimHarness, fault: FaultSpec): void {
         case 'failingFlashCell':
             esc.failingFlashCell = fault.value as boolean | number;
             return;
+        case 'bootloaderDropout':
+            esc.bootloaderDropout = fault.value as boolean | number;
+            return;
         default:
             throw new Error(`--fault ${fault.subject}=${fault.knob}: the CLI cannot apply this knob`);
         }

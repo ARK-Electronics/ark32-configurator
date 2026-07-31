@@ -28,6 +28,37 @@ function why (argv: string[]): string {
     return parsed.message;
 }
 
+describe('parseArgs: releases and flash --release', () => {
+    it('parses releases, which needs neither a port nor --esc', () => {
+        const parsed = ok(['releases']);
+        expect(parsed.command).toBe('releases');
+        expect(parsed.globals.port).toBeNull();
+    });
+
+    it('rejects flags releases does not take', () => {
+        expect(why(['releases', '--esc', 'all'])).toContain('releases does not take --esc');
+    });
+
+    it('parses flash --release', () => {
+        const parsed = ok(['-p', '/dev/ttyACM0', 'flash', '--esc', 'all', '--release', 'nightly']);
+        expect(parsed.release).toBe('nightly');
+        expect(parsed.hex).toBeNull();
+    });
+
+    it('rejects --hex and --release together', () => {
+        expect(why(['-p', 'x', 'flash', '--esc', 'all', '--hex', 'a.hex', '--release', 'nightly']))
+            .toContain('not both');
+    });
+
+    it('names both roads when flash has neither', () => {
+        expect(why(['-p', 'x', 'flash', '--esc', 'all'])).toContain('--release');
+    });
+
+    it('rejects --release under --sim, naming the offline reason', () => {
+        expect(why(['--sim', 'flash', '--esc', 'all', '--release', 'nightly'])).toContain('offline');
+    });
+});
+
 describe('parseArgs: help and version', () => {
     it('answers --help anywhere on the line, before validating anything else', () => {
         expect(parseArgs(['--help']).kind).toBe('help');
@@ -240,6 +271,13 @@ describe('parseArgs: --fault', () => {
             .toBe(false);
         expect(why(['--sim', '--fault', 'fc=blockingFourWay:maybe', 'enumerate']))
             .toContain('takes true or false');
+    });
+
+    it('parses bootloaderDropout bare and counted', () => {
+        expect(ok(['--sim', '--fault', 'esc1=bootloaderDropout', 'enumerate']).globals.faults[0])
+            .toMatchObject({ scope: 'esc', target: 0, knob: 'bootloaderDropout', value: true });
+        expect(ok(['--sim', '--fault', 'esc1=bootloaderDropout:40', 'enumerate']).globals.faults[0])
+            .toMatchObject({ knob: 'bootloaderDropout', value: 40 });
     });
 
     it('rejects an unknown subject or knob, and lists the knobs it knows', () => {

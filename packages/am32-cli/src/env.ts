@@ -25,6 +25,20 @@ export interface OpenPortRequest {
     log?: (message: string) => void
 }
 
+/** One HTTPS response, body already read. */
+export interface HttpResponse {
+    status: number
+    body: string
+}
+
+/** Where `releases` and `flash --release` look for firmware. */
+export interface FirmwareSource {
+    owner: string
+    repo: string
+    /** Sent as a bearer token when set. GitHub's anonymous rate limit is 60/hr. */
+    token: string | null
+}
+
 export interface CliEnv {
     /** Command output. One trailing newline per call is the caller's job. */
     stdout(text: string): void
@@ -42,6 +56,21 @@ export interface CliEnv {
     openPort(request: OpenPortRequest): Promise<Transport>
     /** Every serial port the OS knows about, unfiltered. */
     listPorts(): Promise<NodePortInfo[]>
+
+    /**
+     * One HTTPS GET, redirects followed, body read to a string. Rejects only
+     * when the network itself failed; an HTTP error status is a response.
+     * Injected for the same reason the filesystem is: `releases` and
+     * `flash --release` have to be testable with no network at all.
+     */
+    httpGet(url: string, headers?: Record<string, string>): Promise<HttpResponse>
+
+    /**
+     * The firmware release repo, resolved by the entry point from
+     * `GITHUB_FIRMWARE_OWNER` / `GITHUB_FIRMWARE_REPO` / `GITHUB_TOKEN` (or
+     * `GH_TOKEN`) -- the same variables the web app's server honours.
+     */
+    firmware: FirmwareSource
 
     /** Printed by `--version`. */
     version: string

@@ -122,6 +122,7 @@ export { decodeBytes, decodeBytesZ } from './text';
 export {
     DEFAULT_FIRMWARE_OWNER,
     DEFAULT_FIRMWARE_REPO,
+    FIRMWARE_ASSET_PREFIX,
     findFirmwareAsset,
     firmwareAssetName,
     firmwareVersionFromTag

@@ -2,9 +2,9 @@
  * The firmware release-asset naming convention, as one shared module.
  *
  * The CI in the firmware repo emits
- * `AM32_<FILE_NAME>_<MAJOR.MINOR[.PATCH][-tag]>.hex` (ARK32 Makefile + the
- * "Assert hex naming convention" CI step). Examples:
- * `AM32_ARK_4IN1_F051_3.0.2-ark.hex`, `AM32_ARK_4IN1_F051_3.0-ark.hex`.
+ * `ARK32_<FILE_NAME>_<MAJOR.MINOR[.PATCH][-tag]>.hex` (ARK32 Makefile
+ * `IDENTIFIER` + the "Assert hex naming convention" CI step). Examples:
+ * `ARK32_ARK_4IN1_F051_3.0.2-ark.hex`, `ARK32_ARK_4IN1_F051_3.0-ark.hex`.
  * An ESC names itself with the same `FILE_NAME` in the 32 bytes below its
  * EEPROM. Matching the two is how both clients decide which asset fits the
  * board in front of them, so the rule lives here and nowhere else: the web
@@ -23,6 +23,12 @@ export const DEFAULT_FIRMWARE_OWNER = 'ARK-Electronics';
 export const DEFAULT_FIRMWARE_REPO = 'ARK32';
 
 /**
+ * Prefix of every published app hex/bin/elf (`IDENTIFIER` in the ARK32 Makefile).
+ * Not the bootloader product names under `Bootloaders/AM32_*`.
+ */
+export const FIRMWARE_ASSET_PREFIX = 'ARK32';
+
+/**
  * The version segment a release *tag* implies: `v3.0.2-ark` -> `3.0.2-ark`,
  * `v3.0-ark` -> `3.0-ark`, `v2.18-rc3` -> `2.18`. A tag that does not carry a
  * version -- the rolling `nightly` prerelease -- comes back unchanged, which
@@ -36,7 +42,7 @@ export function firmwareVersionFromTag (tag: string): string {
 
 /** The exact asset name a version tag resolves to for one ESC's `FILE_NAME`. */
 export function firmwareAssetName (fileName: string, tag: string): string {
-    return `AM32_${fileName}_${firmwareVersionFromTag(tag)}.hex`;
+    return `${FIRMWARE_ASSET_PREFIX}_${fileName}_${firmwareVersionFromTag(tag)}.hex`;
 }
 
 export interface NamedAsset {
@@ -64,7 +70,7 @@ export function findFirmwareAsset<T extends NamedAsset> (
     assets: readonly T[],
     fileName: string
 ): T | null {
-    const prefix = `AM32_${fileName}_`;
+    const prefix = `${FIRMWARE_ASSET_PREFIX}_${fileName}_`;
     const matches = assets.filter(asset => asset.name.startsWith(prefix) &&
         ASSET_VERSION.test(asset.name.slice(prefix.length)));
     return matches.length === 1 ? (matches[0] as T) : null;

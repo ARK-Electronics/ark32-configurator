@@ -52,99 +52,6 @@
               No releases
             </div>
           </template>
-          <template #kiss-ultra-releases_data>
-            <div v-if="getFolder('kiss-ultra-releases').value" class="p-4">
-              <div v-if="getFolder('kiss-ultra-releases').value?.files?.length" class="grid grid-cols-4 mb-4">
-                <div v-for="file of getFolder('kiss-ultra-releases').value?.files ?? []" :key="file.url" class="py-1">
-                  <ULink
-                    :to="getFileLink(file)"
-                    external
-                    :download="file.name"
-                    class="transition-all hover:text-red-500"
-                    :class="{
-                      'text-gray-500/20': filter && !file.name.toLowerCase().includes(filter.toLowerCase()),
-                      'text-red-500': filter && file.name.toLowerCase().includes(filter.toLowerCase())
-                    }"
-                  >
-                    {{ file.name }}
-                  </ULink>
-                </div>
-              </div>
-              <UAccordion
-                v-if="getChildrenFolder(getFolder('kiss-ultra-releases').value).length"
-                color="teal"
-                :items="getChildrenFolder(getFolder('kiss-ultra-releases').value)"
-                variant="outline"
-                size="sm"
-              >
-                <template #files="{ item }">
-                  <div class="grid grid-cols-4">
-                    <div v-for="file of item.files" :key="file" class="py-1">
-                      <ULink
-                        :to="getFileLink(file)"
-                        external
-                        :download="file.name"
-                        class="transition-all hover:text-red-500"
-                        :class="{
-                          'text-gray-500/20': filter && !file.name.toLowerCase().includes(filter.toLowerCase()),
-                          'text-red-500': filter && file.name.toLowerCase().includes(filter.toLowerCase())
-                        }"
-                      >
-                        {{ file.name }}
-                      </ULink>
-                    </div>
-                  </div>
-                </template>
-              </UAccordion>
-            </div>
-            <div v-else>
-              No KISS Ultra firmware
-            </div>
-          </template>
-          <template #tools_data>
-            <div v-if="getFolder('tools').value" class="p-4">
-              <div class="grid grid-cols-4">
-                <div v-for="file of getFolder('tools').value?.files ?? []" :key="file.url" class="py-1">
-                  <ULink
-                    :to="getFileLink(file)"
-                    external
-                    :download="file.name"
-                    class="transition-all hover:text-green-500"
-                    :class="{
-                      'text-gray-500/20': filter && !file.name.toLowerCase().includes(filter.toLowerCase()),
-                      'text-red-500': filter && file.name.toLowerCase().includes(filter.toLowerCase())
-                    }"
-                  >
-                    {{ file.name }}
-                  </ULink>
-                </div>
-              </div>
-            </div>
-          </template>
-          <template #unlocker_data>
-            <div v-if="getFolder('unlocker').value" class="p-4">
-              <UAccordion color="teal" :items="getChildrenFolder(getFolder('unlocker').value)" variant="outline" size="sm">
-                <template #files="{ item }">
-                  <div class="grid grid-cols-4">
-                    <div v-for="file of item.files" :key="file" class="py-1">
-                      <ULink
-                        :to="getFileLink(file)"
-                        external
-                        :download="file.name"
-                        class="transition-all hover:text-red-500"
-                        :class="{
-                          'text-gray-500/20': filter && !file.name.toLowerCase().includes(filter.toLowerCase()),
-                          'text-red-500': filter && file.name.toLowerCase().includes(filter.toLowerCase())
-                        }"
-                      >
-                        {{ file.name }}
-                      </ULink>
-                    </div>
-                  </div>
-                </template>
-              </UAccordion>
-            </div>
-          </template>
         </UAccordion>
       </div>
     </div>
@@ -152,15 +59,12 @@
 </template>
 
 <script setup lang="ts">
-const { data, status } = await useLazyFetch('/api/files?prereleases');
+const { data, status } = await useLazyFetch('/api/files?filter=releases&prereleases');
 
 const filter = ref('');
 
 const sectionLabels: Record<string, string> = {
-    releases: 'RELEASES',
-    'kiss-ultra-releases': 'KISS ULTRA RELEASES',
-    tools: 'TOOLS',
-    unlocker: 'UNLOCKER'
+    releases: 'RELEASES'
 };
 
 watchEffect(() => {

@@ -70,7 +70,7 @@
                 Version
               </div>
               <div v-if="Number(getSettingValue('MAIN_REVISION')) > 1" class="col-span-3">
-                {{ getSettingValue('MAIN_REVISION') }}.{{ padVersion(getSettingValue<number>('SUB_REVISION') ?? 0) }}
+                {{ firmwareVersionLabel }}
               </div>
               <div v-else class="col-span-3 text-orange-300 font-bold flex items-center gap-2">
                 <UTooltip text="Default eeprom! Press disconnect and power cycle ESC!" :popper="{ placement: 'right' }">
@@ -107,6 +107,7 @@
 </template>
 <script setup lang="ts">
 import type { EepromLayoutKeys } from 'am32-core/eeprom/layout';
+import { formatEscFirmwareVersion } from 'am32-core/firmware-version';
 import type { EscData } from 'am32-core/mcu';
 
 const props = defineProps<{
@@ -123,6 +124,12 @@ const iconName = computed(() => `i-material-symbols-counter-${props.index + 1}-o
 const isEscError = computed(() => props.esc?.isError || props.esc?.data?.settingsBuffer[0] === 0x00);
 
 const mcu = computed(() => props.esc?.data);
+
+/** Prefer the ship version embedded in `.file_name` (e.g. 3.0.2-ark). */
+const firmwareVersionLabel = computed(() => formatEscFirmwareVersion(
+    mcu.value?.settings ?? {},
+    mcu.value?.meta.am32.firmwareVersion
+));
 
 const isReversed = computed({
     get: () => (getSettingValue<number>('MOTOR_DIRECTION') ?? 0) === 1,
@@ -151,10 +158,6 @@ const layoutVersion = computed(() => getSettingValue<number>('LAYOUT_REVISION'))
 function getSettingValue<T> (name: EepromLayoutKeys): T | null {
     return mcu.value?.settings[name] as T ?? null;
 }
-
-const padVersion = (version: number) => {
-    return padStr(version + '', 2, '0');
-};
 
 const toggleSelected = () => {
     emit('toggle', props.index);

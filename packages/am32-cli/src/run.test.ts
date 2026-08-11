@@ -809,7 +809,7 @@ describe('releases and flash --release through run()', () => {
         tag_name: 'nightly',
         prerelease: true,
         published_at: '2026-07-30T06:56:32Z',
-        assets: [{ name: 'AM32_ARK_4IN1_F051_3.0-ark.hex', browser_download_url: 'https://example.test/a' }]
+        assets: [{ name: 'ARK32_ARK_4IN1_F051_3.0-ark.hex', browser_download_url: 'https://example.test/a' }]
     }]);
 
     it('lists the catalog with no port and no rig', async () => {

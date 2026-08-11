@@ -130,6 +130,11 @@ export interface SimEscOptions {
     bootloaderPin?: number
     /** Firmware name stored in the 32 bytes below the EEPROM (BL:224-226). */
     firmwareName?: string
+    /**
+     * Optional ship version embedded after the first NUL in the name region
+     * (`FILE_NAME\03.0.2-ark\0…`), matching ARK firmware builds.
+     */
+    firmwareVersionLabel?: string
     /** `EEprom_t.eeprom_version`, i.e. the layout revision. */
     layoutRevision?: number
     /**
@@ -146,9 +151,10 @@ const DEFAULTS = {
     signature: 0x1F06,
     bootloaderPin: 0x32,
     firmwareName: 'ARK_4IN1_F051',
+    firmwareVersionLabel: '3.0.2-ark',
     layoutRevision: 3,
     bootloaderVersion: 18,
-    firmwareVersion: [2, 20] as [number, number]
+    firmwareVersion: [3, 0] as [number, number]
 };
 
 export class SimEsc {
@@ -336,7 +342,7 @@ export class SimEsc {
         this.mcu = new Mcu(this.signature);
         this.flash = new Uint8Array(this.mcu.getFlashSize()).fill(0xFF);
 
-        this.writeFirmwareName(opts.firmwareName);
+        this.writeFirmwareName(opts.firmwareName, opts.firmwareVersionLabel);
         this.initEeprom(opts);
     }
 
@@ -711,13 +717,26 @@ export class SimEsc {
         return { ack: 'timeout', data: new Uint8Array(0), durationMs: Math.ceil(durationMs), returnedBytes: 0 };
     }
 
-    private writeFirmwareName (name: string): void {
+    private writeFirmwareName (name: string, versionLabel?: string): void {
         // The 32 bytes below the EEPROM, which the bootloader addresses as
-        // ADDRESS_MAGIC_FILE_NAME (BL:556-559). The NUL truncation is
-        // configurator-side, in `FourWay.getInfo`.
+        // ADDRESS_MAGIC_FILE_NAME (BL:556-559). Layout matches ARK firmware:
+        // `FILE_NAME\0[VERSION\0]…`. Older tools only decode up to the first NUL.
         const bytes = new Uint8Array(32);
-        for (let i = 0; i < name.length && i < 31; i += 1) {
-            bytes[i] = name.charCodeAt(i) & 0xFF;
+        let at = 0;
+        for (let i = 0; i < name.length && at < 31; i += 1, at += 1) {
+            bytes[at] = name.charCodeAt(i) & 0xFF;
+        }
+        if (at < 32) {
+            bytes[at] = 0;
+            at += 1;
+        }
+        if (versionLabel) {
+            for (let i = 0; i < versionLabel.length && at < 31; i += 1, at += 1) {
+                bytes[at] = versionLabel.charCodeAt(i) & 0xFF;
+            }
+            if (at < 32) {
+                bytes[at] = 0;
+            }
         }
         this.flash.set(bytes, this.eepromOffset - 32);
     }

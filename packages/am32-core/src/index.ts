@@ -122,11 +122,20 @@ export { decodeBytes, decodeBytesZ } from './text';
 export {
     DEFAULT_FIRMWARE_OWNER,
     DEFAULT_FIRMWARE_REPO,
+    FIRMWARE_ASSET_PREFIX,
     findFirmwareAsset,
     firmwareAssetName,
     firmwareVersionFromTag
 } from './releases';
 export type { NamedAsset } from './releases';
+
+export {
+    FIRMWARE_NAME_PATTERN,
+    FIRMWARE_VERSION_PATTERN,
+    formatEscFirmwareVersion,
+    parseFirmwareNameRegion
+} from './firmware-version';
+export type { ParsedFirmwareNameRegion } from './firmware-version';
 
 export {
     ARDUPILOT_QUIRKS,

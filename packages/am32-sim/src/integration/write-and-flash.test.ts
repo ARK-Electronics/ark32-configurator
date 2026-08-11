@@ -814,8 +814,8 @@ describe('Am32Session.applyDefaults', () => {
         //   - the CAN block is per-ESC identity with no editor in the configurator
         expect(after[EepromLayout.BOOT_BYTE.offset]).toBe(before[EepromLayout.BOOT_BYTE.offset]);
         expect(after[EepromLayout.LAYOUT_REVISION.offset]).toBe(3);
-        expect(after[EepromLayout.MAIN_REVISION.offset]).toBe(2);
-        expect(after[EepromLayout.SUB_REVISION.offset]).toBe(20);
+        expect(after[EepromLayout.MAIN_REVISION.offset]).toBe(3);
+        expect(after[EepromLayout.SUB_REVISION.offset]).toBe(0);
         expect(Array.from(esc.canBlock)).toEqual([7, 3, 1, 20, 1, 0xC8, 0, 1]);
         // And the firmware's own reserved_eeprom_3, which the default image has
         // ASCII "051 " in and the layout does not name at all.

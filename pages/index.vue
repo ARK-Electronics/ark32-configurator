@@ -76,7 +76,7 @@
                   Join the discord server for support and community interaction.
                 </p>
                 <UButton
-                  to="https://discord.com/invite/h7ddYMmEVV"
+                  to="https://discord.gg/bV6gGxahtp"
                   target="_blank"
                   icon="i-mdi-discord"
                   variant="outline"

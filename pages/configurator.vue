@@ -563,13 +563,20 @@
 </template>
 <script setup lang="ts">
 import type { EepromLayoutKeys } from 'am32-core/eeprom/layout';
+import { formatEscFirmwareVersion } from 'am32-core/firmware-version';
 
 const serialStore = useSerialStore();
 const escStore = useEscStore();
 
 const syncAllEscTunes = ref(false);
 
-const firmwareVersion = computed(() => `${escStore.firstValidEscData?.data.settings.MAIN_REVISION ?? '0'}.${escStore.firstValidEscData?.data.settings.SUB_REVISION ?? '0'}`);
+const firmwareVersion = computed(() => {
+    const data = escStore.firstValidEscData?.data;
+    if (!data) {
+        return '0.0';
+    }
+    return formatEscFirmwareVersion(data.settings, data.meta.am32.firmwareVersion);
+});
 const layoutVersion = computed(() => escStore.firstValidEscData?.data.settings.LAYOUT_REVISION as number ?? 0);
 
 const onChange = (payload: { index: number, field: EepromLayoutKeys, value: boolean }) => {

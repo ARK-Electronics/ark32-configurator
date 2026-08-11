@@ -27,6 +27,12 @@ export interface McuInfo {
         am32: {
             fileName: string | null;
             mcuType: string | null;
+            /**
+             * Full ship version from the optional second C-string in the
+             * `.file_name` region (`3.0.2-ark`), when the firmware embeds one.
+             * Null on older images that only store `FILE_NAME`.
+             */
+            firmwareVersion: string | null;
         };
     };
     displayName: string;
@@ -65,7 +71,8 @@ export function createMcuInfo (params: Uint8Array): McuInfo {
             available: true,
             am32: {
                 fileName: null,
-                mcuType: null
+                mcuType: null,
+                firmwareVersion: null
             }
         },
         displayName: 'UNKNOWN',

@@ -472,7 +472,7 @@ watchEffect(() => {
     if (assets.value && escStore.escData.length > 0) {
         // Matched on the asset-name prefix, not on a name rebuilt from the
         // tag: the rolling `nightly` prerelease carries version-named assets
-        // (`AM32_ARK_4IN1_F051_3.0-ark.hex`), so tag-derived exact names come
+        // (`AM32_ARK_4IN1_F051_3.0.2-ark.hex`), so tag-derived exact names come
         // out as NOT FOUND for every board. Shared with `ark32 flash
         // --release` via am32-core/releases.
         const fileName = escStore.firstValidEscData?.data.meta.am32.fileName;

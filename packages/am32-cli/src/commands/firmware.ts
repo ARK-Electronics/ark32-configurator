@@ -8,6 +8,7 @@
  * host widens *every* derivation at once rather than one literal at one site.
  */
 
+import { formatEscFirmwareVersion } from 'am32-core/firmware-version';
 import { parseHex } from 'am32-core/hex';
 import type { McuInfo } from 'am32-core/mcu';
 import { findFirmwareAsset } from 'am32-core/releases';
@@ -66,8 +67,10 @@ export async function commandFlash (
         return {
             ...summariseOutcome(outcome),
             firmwareName: info.meta.am32.fileName ?? null,
-            firmwareVersion:
-                `${String(info.settings.MAIN_REVISION ?? '?')}.${String(info.settings.SUB_REVISION ?? '?')}`,
+            firmwareVersion: formatEscFirmwareVersion(
+                info.settings,
+                info.meta.am32.firmwareVersion
+            ),
             bootByte: typeof bootByte === 'number' ? bootByte : null
         };
     });
@@ -158,8 +161,10 @@ export async function commandFlashRelease (
         return {
             ...summariseOutcome(outcome),
             firmwareName: info.meta.am32.fileName ?? null,
-            firmwareVersion:
-                `${String(info.settings.MAIN_REVISION ?? '?')}.${String(info.settings.SUB_REVISION ?? '?')}`,
+            firmwareVersion: formatEscFirmwareVersion(
+                info.settings,
+                info.meta.am32.firmwareVersion
+            ),
             bootByte: typeof bootByte === 'number' ? bootByte : null,
             asset
         };

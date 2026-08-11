@@ -8,6 +8,7 @@
  * motors.
  */
 
+import { formatEscFirmwareVersion } from 'am32-core/firmware-version';
 import type { Am32Session, FcInfo } from 'am32-core/session';
 import { EXIT_OK, exitCodeForTargets } from '../exit';
 import type { CommandOutcome } from '../report';
@@ -77,7 +78,10 @@ export function commandEnumerate (
         mcu: result.ok ? result.info?.meta.am32.mcuType ?? null : null,
         firmwareName: result.ok ? result.info?.meta.am32.fileName ?? null : null,
         firmwareVersion: result.ok
-            ? `${String(result.info?.settings.MAIN_REVISION ?? '?')}.${String(result.info?.settings.SUB_REVISION ?? '?')}`
+            ? formatEscFirmwareVersion(
+                result.info?.settings ?? {},
+                result.info?.meta.am32.firmwareVersion
+            )
             : null,
         bootloaderVersion: result.ok ? result.info?.bootloader.version ?? null : null,
         layoutRevision: result.ok ? result.info?.settings.LAYOUT_REVISION ?? null : null,

@@ -61,6 +61,10 @@ import { MspSession, type FcInfo } from './fc/msp-session';
 import { fillImage, parseHex, type HexData } from './hex';
 import { Link, type LinkOptions } from './link/link';
 import { DEFAULT_TIMEOUT_POLICY, TimeoutPolicy } from './link/timeout-policy';
+import {
+    FIRMWARE_NAME_PATTERN,
+    parseFirmwareNameRegion
+} from './firmware-version';
 import { Mcu, createMcuInfo, type McuInfo } from './mcu';
 import { decodeBytesZ } from './text';
 import type { Transport } from './transport';
@@ -248,19 +252,11 @@ const DEFAULT_BAUD_RATE = 115200;
 
 /**
  * The AM32 firmware name lives in the 32 bytes below the EEPROM page
- * (`ADDRESS_MAGIC_FILE_NAME`, AM32-bootloader `main.c:556-559`).
+ * (`ADDRESS_MAGIC_FILE_NAME`, AM32-bootloader `main.c:556-559`). ARK images
+ * also embed the ship version as a second C-string after the first NUL; see
+ * `parseFirmwareNameRegion`.
  */
 const FIRMWARE_NAME_BYTES = 32;
-
-/**
- * Accept a firmware name that contains a run of name characters.
- *
- * Deliberately the app's unanchored test rather than a stricter anchored one:
- * its real job is to reject an erased (`0xFF`) or empty read, and tightening it
- * would newly reject any real name with a character outside the class -- which
- * would silently break the firmware-catalog lookup, whose key is this string.
- */
-const FIRMWARE_NAME_PATTERN = /[A-Z0-9_]+/;
 
 /**
  * Bytes per `cmd_DeviceWrite` while streaming a firmware image.
@@ -726,10 +722,11 @@ export class Am32Session {
         const eepromOffset = mcu.getEepromOffset();
 
         const nameBytes = await this.fourWay.readAddress(eepromOffset - FIRMWARE_NAME_BYTES, FIRMWARE_NAME_BYTES);
-        const fileName = decodeBytesZ(nameBytes);
-        if (FIRMWARE_NAME_PATTERN.test(fileName)) {
-            info.meta.am32.fileName = fileName;
-            info.meta.am32.mcuType = fileName.slice(fileName.lastIndexOf('_') + 1);
+        const parsedName = parseFirmwareNameRegion(nameBytes);
+        if (parsedName.fileName) {
+            info.meta.am32.fileName = parsedName.fileName;
+            info.meta.am32.mcuType = parsedName.fileName.slice(parsedName.fileName.lastIndexOf('_') + 1);
+            info.meta.am32.firmwareVersion = parsedName.firmwareVersion;
         }
 
         // The bootloader pin code arrives in the init-flash reply, not the EEPROM.

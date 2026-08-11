@@ -123,6 +123,7 @@ describe('block 4 done-when: a simulated 4-ESC ArduPilot enumerates all four', (
             // decoded settings object.
             expect(result.info?.settingsBuffer).toHaveLength(192);
             expect(result.info?.meta.am32.fileName).toBe('ARK_4IN1_F051');
+            expect(result.info?.meta.am32.firmwareVersion).toBe('3.0.2-ark');
             expect(result.info?.meta.am32.mcuType).toBe('F051');
             expect(result.info?.settings.LAYOUT_REVISION).toBe(3);
             expect(result.info?.bootloader.valid).toBe(true);

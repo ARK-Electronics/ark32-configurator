@@ -196,7 +196,7 @@ async function getSectionFromGithub (
 export default defineEventHandler(async (event) => {
     const query = getQuery(event);
     const includePrereleases = query.prereleases !== undefined;
-    const filter = query.filter?.toString().split(',') ?? ['releases', 'kiss-ultra-releases', 'tools', 'unlocker'];
+    const filter = query.filter?.toString().split(',') ?? ['releases'];
 
     const sectionConfigs: SectionConfig[] = [
         {
@@ -207,30 +207,6 @@ export default defineEventHandler(async (event) => {
             storageName: 'releases',
             nested: true,
             includePrereleaseFilter: true
-        },
-        {
-            filterName: 'kiss-ultra-releases',
-            folderName: 'kiss-ultra-releases',
-            bucketName: 'kiss-ultra-releases',
-            cacheNamespace: 'kiss-ultra-releases',
-            storageName: 'kiss-ultra-releases',
-            nested: true
-        },
-        {
-            filterName: 'tools',
-            folderName: 'tools',
-            bucketName: 'am32-tools',
-            cacheNamespace: 'tools',
-            storageName: 'tools',
-            nested: false
-        },
-        {
-            filterName: 'unlocker',
-            folderName: 'unlocker',
-            bucketName: 'unlocker',
-            cacheNamespace: 'unlocker',
-            storageName: 'unlocker',
-            nested: true
         }
     ];
 

@@ -62,9 +62,9 @@
                   Visit the <a href="#">latest release</a> for firmware updates.
                 </p>
                 <p>
-                  Download the Multi_ESC config tool under the <NuxtLink class="underline text-red-400" to="/downloads">
+                  Grab firmware from the <NuxtLink class="underline text-red-400" to="/downloads">
                     Downloads
-                  </NuxtLink> section.
+                  </NuxtLink> page.
                 </p>
               </div>
 

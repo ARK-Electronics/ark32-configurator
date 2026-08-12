@@ -10,6 +10,16 @@
         <div class="text-xl p-6 text-center text-orange-500">
           Please connect to a device and read settings.
         </div>
+        <div class="flex justify-center">
+          <UButton
+            icon="i-heroicons-book-open"
+            variant="ghost"
+            size="xs"
+            @click="guideOpen = true"
+          >
+            Settings cheat sheet
+          </UButton>
+        </div>
       </div>
       <div v-else-if="serialStore.isFourWay" class="pt-4 pb-12 h-full">
         <UTabs
@@ -73,6 +83,16 @@
               </div>
               <div v-else-if="escStore.selectedEscInfo.length > 0" class="p-4 max-w-[1400px] m-auto">
                 <div class="flex flex-col gap-4 justify-center">
+                  <div class="flex justify-end">
+                    <UButton
+                      icon="i-heroicons-book-open"
+                      variant="ghost"
+                      size="xs"
+                      @click="guideOpen = true"
+                    >
+                      Settings cheat sheet
+                    </UButton>
+                  </div>
                   <SettingFieldGroup
                     class="w-1/2"
                     title="Essentials"
@@ -94,7 +114,6 @@
                       type="select"
                       :options="protocolOptions"
                       placeholder="Select input protocol"
-                      help="Help text"
                       @change="onSettingsChange"
                     />
                   </SettingFieldGroup>
@@ -204,7 +223,7 @@
                       name="Motor poles"
                       type="number"
                       :min="2"
-                      :max="36"
+                      :max="64"
                       show-value
                       @change="onSettingsChange"
                     />
@@ -559,6 +578,20 @@
         </UTabs>
       </div>
     </div>
+    <USlideover v-model="guideOpen" :ui="{ width: 'w-screen max-w-4xl' }">
+      <div class="p-4 overflow-y-auto h-full">
+        <div class="flex justify-end mb-2">
+          <UButton
+            color="gray"
+            variant="ghost"
+            icon="i-heroicons-x-mark-20-solid"
+            class="-my-1"
+            @click="guideOpen = false"
+          />
+        </div>
+        <SettingsGuide />
+      </div>
+    </USlideover>
   </div>
 </template>
 <script setup lang="ts">
@@ -569,6 +602,7 @@ const serialStore = useSerialStore();
 const escStore = useEscStore();
 
 const syncAllEscTunes = ref(false);
+const guideOpen = ref(false);
 
 const firmwareVersion = computed(() => {
     const data = escStore.firstValidEscData?.data;

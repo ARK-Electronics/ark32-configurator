@@ -25,6 +25,7 @@ The fork was rebuilt around a single protocol core in July 2026 — issue #3 has
 - **Verified writes.** Every settings write and flash chunk is read back and compared, and the ESC's CAN block (EEPROM bytes 176–183) survives every save — upstream's save path could corrupt it.
 - **Correct FC handling.** Connect probes instead of unconditionally sitting out ArduPilot's 4 s MAVLink window, an unresponsive ESC degrades an enumerate instead of crashing it, and flash timeouts match the FC's real budgets.
 - **ARK32 firmware catalog.** Release listings come from `ARK-Electronics/ARK32` GitHub Releases (MinIO-backed hosting optional).
+- **Settings cheat sheet.** Every EEPROM field is documented under **Settings guide** in the web UI (also a slide-over from the configurator). Same text lives in [ARK32 `doc/eeprom-settings.md`](https://github.com/ARK-Electronics/ARK32/blob/ark-release/doc/eeprom-settings.md).
 - **Removed:** bootloader flashing and USB-direct mode.
 
 ## The `ark32` CLI

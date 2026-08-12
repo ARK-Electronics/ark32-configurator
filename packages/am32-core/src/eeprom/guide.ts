@@ -60,14 +60,14 @@ export const SETTING_GUIDE: readonly SettingGuideEntry[] = [
         name: 'Ramp rate',
         range: '0.1–20 % duty / ms',
         arkDefault: '2.0 %/ms',
-        help: 'How fast duty may change, as a percent of full throttle per millisecond — not a percent of the loop rate. 2 %/ms means 0→100% takes 50 ms; lower is safer on large props, and values under 1.0 use a finer 0.1 %/ms step. Firmware also caps each rpm band, so this setting only lowers that cap.'
+        help: 'How fast duty may change, as a percent of full throttle per millisecond. 2 %/ms means 0→100% takes 50 ms; lower is safer on large props, and values under 1.0 use a finer 0.1 %/ms step. Firmware also caps each rpm band, so this setting only lowers that cap.'
     },
     {
         field: 'MINIMUM_DUTY_CYCLE',
         name: 'Minimum duty cycle',
         range: '0–25%',
         arkDefault: '2%',
-        help: 'Lowest PWM the ESC will apply once spinning. Raise if the motor will not start or growls at idle. Too high wastes hover power.'
+        help: 'Lowest motor duty the ESC will apply once spinning, on DShot and servo alike. Raise if the motor will not start or growls at idle. Too high wastes hover power.'
     },
     {
         field: 'DISABLE_STICK_CALIBRATION',
@@ -130,7 +130,7 @@ export const SETTING_GUIDE: readonly SettingGuideEntry[] = [
         name: 'Sinusoidal startup',
         range: 'Off / On',
         arkDefault: 'Off',
-        help: 'Open-loop sine drive at the start of spool-up, smoother on large, high-inertia motors. Requires Complementary PWM. Off on stock ARK 4IN1.'
+        help: 'Open-loop sine drive at the start of spool-up, smoother on large, high-inertia motors. Requires Complementary PWM. ARK 4IN1 ships this off; the feature is still available.'
     },
     {
         field: 'COMPLEMENTARY_PWM',
@@ -184,7 +184,7 @@ export const SETTING_GUIDE: readonly SettingGuideEntry[] = [
     {
         field: 'MOTOR_POLES',
         name: 'Motor poles',
-        range: '2–36 (configurator); firmware accepts 2–64',
+        range: '2–64',
         arkDefault: '14',
         help: 'Magnet count, usually 14. Scales rpm telemetry and the same envelope/timing math as Motor KV.'
     },

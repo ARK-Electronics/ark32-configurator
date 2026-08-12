@@ -40,6 +40,10 @@ const links = computed(() => [{
     icon: 'i-heroicons-cpu-chip-16-solid',
     to: '/configurator'
 }, {
+    label: 'Settings guide',
+    icon: 'i-heroicons-book-open',
+    to: '/guide'
+}, {
     label: 'Downloads',
     icon: 'i-material-symbols-download-rounded',
     to: '/downloads'

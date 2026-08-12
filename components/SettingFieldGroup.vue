@@ -5,11 +5,29 @@
     </div>
     <div class="flex">
       <div v-if="filteredSwitches.length > 0 || filteredRadios.length > 0" class="p-4">
-        <div v-for="{ field, name, setValue } of filteredSwitches" :key="field">
+        <div v-for="{ field, name, setValue } of filteredSwitches" :key="field" class="flex items-center gap-1">
           <UCheckbox v-model="boolModel(field, setValue).value" :label="name" />
+          <UTooltip v-if="helpFor(field)" :popper="{ placement: 'right' }">
+            <UIcon name="i-material-symbols-help-outline" class="text-blue-500 text-base" />
+            <template #text>
+              <p class="max-w-xs text-sm leading-snug">
+                {{ helpFor(field) }}
+              </p>
+            </template>
+          </UTooltip>
         </div>
         <div v-for="{ field, name, values } of filteredRadios" :key="field" :label="name">
-          <div>{{ name }}</div>
+          <div class="flex items-center gap-1">
+            <div>{{ name }}</div>
+            <UTooltip v-if="helpFor(field)" :popper="{ placement: 'right' }">
+              <UIcon name="i-material-symbols-help-outline" class="text-blue-500 text-base" />
+              <template #text>
+                <p class="max-w-xs text-sm leading-snug">
+                  {{ helpFor(field) }}
+                </p>
+              </template>
+            </UTooltip>
+          </div>
           <URadioGroup v-model="model(field).value" class="ml-2" :options="values.map(v => ({ label: v.name, value: v.value }))" value-key="value" label-key="name" />
         </div>
       </div>
@@ -28,6 +46,7 @@
 </template>
 <script setup lang="ts">
 import { coerce, compare } from 'semver';
+import { settingHelp } from 'am32-core/eeprom/guide';
 import type { EepromLayoutKeys } from 'am32-core/eeprom/layout';
 
 const escStore = useEscStore();
@@ -73,6 +92,8 @@ const props = withDefaults(defineProps<SettingFieldGroupProps>(), {
 });
 
 const semverFirmwareVersion = props.firmwareVersion?.replace(/(v[0-9]+)\.0?([0-9])/i, '$1.$2') ?? '0.0';
+
+const helpFor = (field: EepromLayoutKeys) => settingHelp(field);
 
 const filteredSwitches = computed(() => props.switches
     .filter(s => (!s.minEepromVersion || props.eepromVersion >= s.minEepromVersion) &&

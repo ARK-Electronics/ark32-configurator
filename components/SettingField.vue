@@ -11,8 +11,13 @@
           <div v-if="name">
             {{ name }}
           </div>
-          <UTooltip v-if="help" :text="help" :popper="{ placement: 'right' }">
+          <UTooltip v-if="resolvedHelp" :popper="{ placement: 'right' }">
             <UIcon name="i-material-symbols-help-outline" class="text-blue-500 text-lg" />
+            <template #text>
+              <p class="max-w-xs text-sm leading-snug">
+                {{ resolvedHelp }}
+              </p>
+            </template>
           </UTooltip>
         </div>
       </template>
@@ -62,6 +67,7 @@
 </template>
 <script setup lang="ts">
 import Rtttl from 'bluejay-rtttl-parse';
+import { settingHelp } from 'am32-core/eeprom/guide';
 import type { EepromLayoutKeys } from 'am32-core/eeprom/layout';
 import type { McuInfo } from 'am32-core/mcu';
 
@@ -107,6 +113,8 @@ const props = withDefaults(defineProps<SettingFieldProps>(), {
 });
 
 const emits = defineEmits<{(e: 'change', value: { field: EepromLayoutKeys, value: number | number[], individual?: number }): void}>();
+
+const resolvedHelp = computed(() => props.help ?? settingHelp(props.field));
 
 const isDisabled = computed(() => {
     if (props.disabled) {

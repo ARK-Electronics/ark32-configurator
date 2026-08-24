@@ -2,11 +2,11 @@
  * Firmware version helpers shared by the web app and the CLI.
  *
  * AM32 EEPROM only carries two version bytes (`MAIN_REVISION` / `SUB_REVISION`,
- * major.minor). ARK ship releases also have a patch (and often a `-ark` tag)
- * that lives in the 32-byte `.file_name` region as a second C-string after the
- * board `FILE_NAME`:
+ * major.minor). ARK ship releases also have a patch (and, on older tags, a
+ * `-ark` suffix) that lives in the 32-byte `.file_name` region as a second
+ * C-string after the board `FILE_NAME`:
  *
- *   `ARK_4IN1_F051\03.0.2-ark\0...`
+ *   `ARK_4IN1_F051\03.0.3\0...`
  *
  * Older images only store `FILE_NAME`; those fall back to the EEPROM pair.
  */
@@ -25,15 +25,15 @@ export const FIRMWARE_NAME_PATTERN = /[A-Z0-9_]+/;
  * A full ARK / AM32 ship version as it appears in artifact names and (when
  * present) the second C-string of the `.file_name` region.
  *
- * Examples: `3.0.2-ark`, `3.0-ark`, `2.18`, `2.20`.
+ * Examples: `3.0.3`, `3.0.2-ark`, `2.18`, `2.20`.
  */
-export const FIRMWARE_VERSION_PATTERN = /^\d+\.\d+(?:\.\d+)?(?:-[A-Za-z0-9._-]+)?$/;
+export const FIRMWARE_VERSION_PATTERN = /^\d+\.\d+(?:\.\d+)?(?:-[A-Za-z0-9][A-Za-z0-9_-]*)?$/;
 
 export interface ParsedFirmwareNameRegion {
     /** Board identity (`FILE_NAME`), e.g. `ARK_4IN1_F051`. Null when absent. */
     fileName: string | null
     /**
-     * Full ship version from the optional second C-string, e.g. `3.0.2-ark`.
+     * Full ship version from the optional second C-string, e.g. `3.0.3`.
      * Null when the image only stores `FILE_NAME` (pre-ARK-patch firmwares and
      * stock AM32).
      */

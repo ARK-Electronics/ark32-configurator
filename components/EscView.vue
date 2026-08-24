@@ -125,7 +125,7 @@ const isEscError = computed(() => props.esc?.isError || props.esc?.data?.setting
 
 const mcu = computed(() => props.esc?.data);
 
-/** Prefer the ship version embedded in `.file_name` (e.g. 3.0.2-ark). */
+/** Prefer the ship version embedded in `.file_name` (e.g. 3.0.3). */
 const firmwareVersionLabel = computed(() => formatEscFirmwareVersion(
     mcu.value?.settings ?? {},
     mcu.value?.meta.am32.firmwareVersion

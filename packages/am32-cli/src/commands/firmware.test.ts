@@ -71,8 +71,8 @@ const NIGHTLY: FirmwareRelease = {
     prerelease: true,
     publishedAt: '2026-07-30T06:56:32Z',
     assets: [
-        { name: 'ARK32_ARK_4IN1_F051_3.0-ark.hex', downloadUrl: 'https://example.test/ark4in1' },
-        { name: 'ARK32_REF_G431_3.0-ark.hex', downloadUrl: 'https://example.test/g431' }
+        { name: 'ARK32_ARK_4IN1_F051_3.0.3.hex', downloadUrl: 'https://example.test/ark4in1' },
+        { name: 'ARK32_REF_G431_3.0.3.hex', downloadUrl: 'https://example.test/g431' }
     ]
 };
 
@@ -90,7 +90,7 @@ describe('commandFlashRelease', () => {
         const escs = outcome.data.escs as { ok: boolean, asset: string | null }[];
         expect(escs.every(esc => esc.ok)).toBe(true);
         expect(escs.map(esc => esc.asset))
-            .toEqual(Array.from({ length: 4 }, () => 'ARK32_ARK_4IN1_F051_3.0-ark.hex'));
+            .toEqual(Array.from({ length: 4 }, () => 'ARK32_ARK_4IN1_F051_3.0.3.hex'));
         // Four ESCs, one distinct asset: the download is shared, not repeated.
         expect(urls).toEqual(['https://example.test/ark4in1']);
     });

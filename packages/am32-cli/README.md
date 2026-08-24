@@ -34,7 +34,7 @@ ark32 -p /dev/ttyACM0 write --esc all -i backup/esc-1.bin
 ark32 -p /dev/ttyACM0 get   --esc 1 TIMING_ADVANCE
 ark32 -p /dev/ttyACM0 set   --esc all TIMING_ADVANCE=16
 ark32 -p /dev/ttyACM0 defaults --esc all
-ark32 -p /dev/ttyACM0 flash --esc 1 --hex AM32_ARK_4IN1_F051_3.0-ark.hex
+ark32 -p /dev/ttyACM0 flash --esc 1 --hex ARK32_ARK_4IN1_F051_3.0.3.hex
 ark32 -p /dev/ttyACM0 reset --esc all
 ```
 

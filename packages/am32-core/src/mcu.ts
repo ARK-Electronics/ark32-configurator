@@ -29,7 +29,7 @@ export interface McuInfo {
             mcuType: string | null;
             /**
              * Full ship version from the optional second C-string in the
-             * `.file_name` region (`3.0.2-ark`), when the firmware embeds one.
+             * `.file_name` region (`3.0.3`), when the firmware embeds one.
              * Null on older images that only store `FILE_NAME`.
              */
             firmwareVersion: string | null;

@@ -159,7 +159,7 @@ ark32 -p /dev/ttyACM0 set --esc 1 TIMING_ADVANCE=16
 #   power-cycle the board here
 ark32 -p /dev/ttyACM0 read --esc all -o after
 cmp before/esc-1.bin after/esc-1.bin            # only byte 0x17 may differ
-ark32 -p /dev/ttyACM0 -v flash --esc 1 --hex AM32_ARK_4IN1_F051_3.0-ark.hex
+ark32 -p /dev/ttyACM0 -v flash --esc 1 --hex ARK32_ARK_4IN1_F051_3.0.3.hex
 ```
 
 `cmp` on the two dumps is a stronger form of the CAN-block check than reading the

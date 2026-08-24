@@ -132,7 +132,7 @@ export interface SimEscOptions {
     firmwareName?: string
     /**
      * Optional ship version embedded after the first NUL in the name region
-     * (`FILE_NAME\03.0.2-ark\0…`), matching ARK firmware builds.
+     * (`FILE_NAME\03.0.3\0…`), matching ARK firmware builds.
      */
     firmwareVersionLabel?: string
     /** `EEprom_t.eeprom_version`, i.e. the layout revision. */
@@ -151,7 +151,7 @@ const DEFAULTS = {
     signature: 0x1F06,
     bootloaderPin: 0x32,
     firmwareName: 'ARK_4IN1_F051',
-    firmwareVersionLabel: '3.0.2-ark',
+    firmwareVersionLabel: '3.0.3',
     layoutRevision: 3,
     bootloaderVersion: 18,
     firmwareVersion: [3, 0] as [number, number]

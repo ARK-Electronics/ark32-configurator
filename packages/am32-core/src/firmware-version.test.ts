@@ -28,6 +28,10 @@ describe('parseFirmwareNameRegion', () => {
     });
 
     it('reads FILE_NAME plus an embedded ship version after the first NUL', () => {
+        expect(parseFirmwareNameRegion(region(['ARK_4IN1_F051', '3.0.3']))).toEqual({
+            fileName: 'ARK_4IN1_F051',
+            firmwareVersion: '3.0.3'
+        });
         expect(parseFirmwareNameRegion(region(['ARK_4IN1_F051', '3.0.2-ark']))).toEqual({
             fileName: 'ARK_4IN1_F051',
             firmwareVersion: '3.0.2-ark'
@@ -62,6 +66,10 @@ describe('parseFirmwareNameRegion', () => {
 
 describe('formatEscFirmwareVersion', () => {
     it('prefers the embedded ship version', () => {
+        expect(formatEscFirmwareVersion(
+            { MAIN_REVISION: 3, SUB_REVISION: 0 },
+            '3.0.3'
+        )).toBe('3.0.3');
         expect(formatEscFirmwareVersion(
             { MAIN_REVISION: 3, SUB_REVISION: 0 },
             '3.0.2-ark'

@@ -32,4 +32,12 @@ describe('eeprom settings guide', () => {
         expect(settingHelp('MAX_RAMP')).toContain('percent of full throttle per millisecond');
         expect(settingGuide('NO_SUCH_FIELD')).toBeUndefined();
     });
+
+    it('tracks the firmware MOTOR_POLES_MAX of 128', () => {
+        expect(settingGuide('MOTOR_POLES')?.range).toBe('2–128');
+    });
+
+    it('names the firmware rpm-band ramp ceilings', () => {
+        expect(settingHelp('MAX_RAMP')).toContain('low-rpm 6, high-rpm 16');
+    });
 });

@@ -123,6 +123,7 @@ export {
     DEFAULT_FIRMWARE_OWNER,
     DEFAULT_FIRMWARE_REPO,
     FIRMWARE_ASSET_PREFIX,
+    LEGACY_FIRMWARE_ASSET_PREFIX,
     findFirmwareAsset,
     firmwareAssetName,
     firmwareVersionFromTag

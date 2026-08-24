@@ -60,7 +60,7 @@ export const SETTING_GUIDE: readonly SettingGuideEntry[] = [
         name: 'Ramp rate',
         range: '0.1–20 % duty / ms',
         arkDefault: '2.0 %/ms',
-        help: 'How fast duty may change, as a percent of full throttle per millisecond. 2 %/ms means 0→100% takes 50 ms; lower is safer on large props, and values under 1.0 use a finer 0.1 %/ms step. Firmware also caps each rpm band, so this setting only lowers that cap.'
+        help: 'How fast duty may change, as a percent of full throttle per millisecond. 2 %/ms means 0→100% takes 50 ms; lower is safer on large props, and values under 1.0 use a finer 0.1 %/ms step. Firmware also caps each rpm band (startup 2, low-rpm 6, high-rpm 16 %/ms), so this setting only lowers that cap.'
     },
     {
         field: 'MINIMUM_DUTY_CYCLE',
@@ -184,9 +184,9 @@ export const SETTING_GUIDE: readonly SettingGuideEntry[] = [
     {
         field: 'MOTOR_POLES',
         name: 'Motor poles',
-        range: '2–64',
+        range: '2–128',
         arkDefault: '14',
-        help: 'Magnet count, usually 14. Scales rpm telemetry and the same envelope/timing math as Motor KV.'
+        help: 'Magnet count, usually 14. Scales rpm telemetry and the same envelope/timing math as Motor KV. The ceiling is 128 for high-pole outrunners and hub motors.'
     },
     {
         field: 'BRAKE_ON_STOP',

@@ -60,7 +60,7 @@ export const SETTING_GUIDE: readonly SettingGuideEntry[] = [
         name: 'Ramp rate',
         range: '0.1–20 % duty / ms',
         arkDefault: '2.0 %/ms',
-        help: 'How fast duty may change, as a percent of full throttle per millisecond. 2 %/ms means 0→100% takes 50 ms; lower is safer on large props, and values under 1.0 use a finer 0.1 %/ms step. Firmware also caps each rpm band (startup 2, low-rpm 6, high-rpm 16 %/ms), so this setting only lowers that cap.'
+        help: 'How fast duty may change, as a percent of full throttle per millisecond. 2 %/ms means 0→100% takes 50 ms; lower is safer on large props, and values under 1.0 use a finer 0.1 %/ms step. Firmware caps each rpm band (startup 2, low-rpm 6, high-rpm 16 %/ms) and this setting only lowers those caps, so the factory 2.0 %/ms flattens all three — raise toward 16 %/ms for high-kV 5–7 inch punch.'
     },
     {
         field: 'MINIMUM_DUTY_CYCLE',

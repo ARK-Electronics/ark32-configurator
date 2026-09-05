@@ -24,7 +24,9 @@
  *     is a store field that will drift.
  */
 
-import { decodeSettings } from 'am32-core/eeprom/codec';
+import { decode } from 'am32-core/eeprom/codec';
+import { portableSettingsPatch, schemaForEsc } from '~/utils/schema-settings';
+import { refreshUiSchema } from '~/utils/load-ui-schema';
 import {
     Am32Session,
     SessionError,
@@ -210,7 +212,8 @@ export const useEscSession = () => {
         });
         // The session opens the transport itself, so the baud rate the user picked
         // has to reach it here rather than at an `open()` call site.
-        const session = new Am32Session({ transport, baudRate });
+        const schemaInfo = await refreshUiSchema();
+        const session = new Am32Session({ transport, baudRate, schemaInfo });
         mirror(session);
         live.session = session;
 
@@ -381,9 +384,9 @@ export const useEscSession = () => {
     };
 
     /**
-     * Stage `settings` on the given one-based ESC numbers, then write them.
+     * Decode an uploaded image per target, or stage a raw settings patch, then write.
      *
-     * **`CAN_SETTINGS` is dropped on the way in.** Those bytes are per-ESC identity
+     * Preserved and read-only fields are dropped on the way in. CAN bytes are per-ESC identity
      * -- `can_node` and `esc_index` among them -- not a tunable, and the
      * configurator has no editor for them. Copying one ESC's saved config onto all
      * four would otherwise give an ARK DroneCAN board four ESCs with the same node
@@ -391,15 +394,16 @@ export const useEscSession = () => {
      * so dropping it here is the whole fix, and `downloadEscConfig` still saves all
      * 192 bytes so nothing is lost from the file.
      */
-    const applySettings = async (settings: EscSettings, escNumbers: number[]): Promise<boolean> => {
-        const portable = Object.fromEntries(
-            Object.entries(settings).filter(([field]) => field !== 'CAN_SETTINGS')
-        ) as EscSettings;
-
+    const applySettings = async (settings: EscSettings | Uint8Array, escNumbers: number[]): Promise<boolean> => {
         for (const n of escNumbers) {
             const entry = escStore.escData[n - 1];
             if (entry?.data) {
-                entry.data.settings = { ...portable };
+                const resolved = schemaForEsc(entry.data);
+                const patch = settings instanceof Uint8Array
+                    ? decode(settings, requireSession().schema, resolved.context)
+                    : settings;
+                const portable = portableSettingsPatch(patch, resolved);
+                entry.data.settings = { ...entry.data.settings, ...portable };
                 entry.data.settingsDirty = true;
             }
         }
@@ -508,18 +512,6 @@ export const useEscSession = () => {
         }
     };
 
-    /**
-     * Decode a settings file the user picked, or a default image from the server.
-     *
-     * Here rather than in a component so `am32-core/eeprom/codec` has exactly one
-     * caller in the app. A short file (the served defaults are 48 bytes) decodes
-     * to the fields it actually contains and the rest of the ESC's image is left
-     * alone by the write -- which is why *apply defaults* used to be the worst
-     * offender for audit item **A**.
-     */
-    const decodeSettingsFile = (buffer: Uint8Array, layoutRevision: number): EscSettings =>
-        decodeSettings(buffer, layoutRevision);
-
     return {
         connect,
         disconnect,
@@ -528,7 +520,6 @@ export const useEscSession = () => {
         applySettings,
         applyDefaults,
         flashTargets,
-        decodeSettingsFile,
         get isConnected () {
             return live.session !== null;
         }

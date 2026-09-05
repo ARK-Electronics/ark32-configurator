@@ -9,17 +9,17 @@
     "packages/*"
   ],
   "scripts": {
-    "verify": "nuxt prepare && yarn lint && yarn typecheck && yarn test",
-    "test": "vitest run",
-    "test:watch": "vitest",
+    "verify": "yarn schema:check && nuxt prepare && yarn lint && yarn typecheck && yarn test",
+    "test": "node scripts/gen-eeprom-layout.ts && vitest run",
+    "test:watch": "node scripts/gen-eeprom-layout.ts && vitest",
     "typecheck": "yarn typecheck:core && yarn typecheck:app",
-    "typecheck:core": "tsc -p packages/am32-core/tsconfig.json --noEmit",
-    "typecheck:app": "nuxt prepare && vue-tsc --noEmit",
-    "build": "nuxt prepare && prisma generate && nuxt build",
-    "build:cli": "node scripts/build-cli.mjs",
-    "dev": "nuxt prepare && prisma generate && nuxt dev",
-    "generate": "nuxt prepare && prisma generate && nuxt generate",
-    "prepare": "nuxt prepare",
+    "typecheck:core": "node scripts/gen-eeprom-layout.ts && tsc -p packages/am32-core/tsconfig.json --noEmit",
+    "typecheck:app": "node scripts/gen-eeprom-layout.ts && nuxt prepare && vue-tsc --noEmit",
+    "build": "node scripts/gen-eeprom-layout.ts && nuxt prepare && prisma generate && nuxt build",
+    "build:cli": "node scripts/gen-eeprom-layout.ts && node scripts/build-cli.mjs",
+    "dev": "node scripts/gen-eeprom-layout.ts && nuxt prepare && prisma generate && nuxt dev",
+    "generate": "node scripts/gen-eeprom-layout.ts && nuxt prepare && prisma generate && nuxt generate",
+    "prepare": "node scripts/gen-eeprom-layout.ts && nuxt prepare",
     "preview": "nuxt preview",
     "start": "node scripts/start.mjs",
     "upload:files": "node deploy-files/upload.ts",
@@ -27,7 +27,8 @@
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate deploy",
     "prisma:push": "prisma db push",
-    "prisma:seed": "prisma db seed"
+    "prisma:seed": "prisma db seed",
+    "schema:check": "bash scripts/assert-schema-sync.sh"
   },
   "devDependencies": {
     "@egoist/tailwindcss-icons": "^1.9.2",

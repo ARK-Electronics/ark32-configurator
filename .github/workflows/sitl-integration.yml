@@ -1,0 +1,59 @@
+name: Firmware SITL integration
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Pin the companion implementation so this check is reproducible before and
+# after its PR merges. Update deliberately when testing another firmware line.
+env:
+  ARK32_FIRMWARE_REF: 6d450cb9acbb736a64dfdc595fbb377adb0e7187
+  DATABASE_URL: mysql://am32:am32password@127.0.0.1:3308/am32
+  NUXT_TELEMETRY_DISABLED: '1'
+
+jobs:
+  integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+
+      - name: Install configurator dependencies
+        run: |
+          corepack enable
+          yarn install --immutable
+
+      - uses: actions/checkout@v4
+        with:
+          repository: ARK-Electronics/ARK32
+          ref: ${{ env.ARK32_FIRMWARE_REF }}
+          path: .firmware
+          submodules: recursive
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install firmware test dependencies
+        run: python -m pip install -r .firmware/Mcu/SITL/requirements-ci.txt
+
+      - name: Build real firmware SITL
+        run: make -C .firmware AM32_SITL_CAN
+
+      - name: Verify codec, defaults, and DroneCAN save/restart
+        shell: bash
+        run: python scripts/sitl/run_integration.py --firmware .firmware 2>&1 | tee sitl-integration.log
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: firmware-sitl-integration
+          path: sitl-integration.log
+          if-no-files-found: ignore

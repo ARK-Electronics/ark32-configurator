@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { assert as fcAssert, integer, property, uint8Array } from 'fast-check';
 import type { EepromLayoutField } from './layout';
 import { EEPROM_SIZE, EepromLayout } from './layout';
+import { BUNDLED_SCHEMA } from './schema';
 import { decodeSettings, encodeSettings, patchSettings } from './codec';
 
 /**
@@ -64,7 +65,7 @@ describe('eeprom codec round-trip', () => {
                 integer({ min: 0, max: 255 }),
                 (bytes, fieldIndex, value) => {
                     const [name, field] = singleByteFields[fieldIndex] as [string, { offset: number }];
-                    const encoded = patchSettings(bytes, { [name]: value }, 3);
+                    const encoded = patchSettings(bytes, { [name]: value }, 3, BUNDLED_SCHEMA, { layout: 3, firmware: '32.0' });
 
                     expect(encoded[field.offset]).toBe(value);
                     for (let i = 0; i < EEPROM_SIZE; i += 1) {
@@ -290,7 +291,7 @@ describe('layout invariants', () => {
         // The 16-bit big-endian branch both old converters carried was dead
         // code. If a two-byte field is ever added, the codec needs a decision
         // about endianness before this test is changed.
-        const twoByte = Object.entries(EepromLayout).filter(([, f]) => f.size === 2);
+        const twoByte = Object.entries(EepromLayout as EepromLayoutField).filter(([, f]) => f.size === 2);
         expect(twoByte).toEqual([]);
     });
 

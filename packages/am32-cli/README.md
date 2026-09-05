@@ -43,6 +43,23 @@ like `1,3`.
 
 `ark32 --help` is the full flag list.
 
+## EEPROM schema and raw values
+
+Before connecting, the CLI fetches `eeprom.json` from the latest ARK32 release.
+It validates the schema language and byte layout, then caches the JSON at
+`~/.cache/ark32/eeprom.json`. An unchanged release SHA256 avoids downloading it
+again. Offline runs use a valid cache or the bundled schema. `--sim` uses the
+bundle without network access.
+
+One schema resolves separately against each ESC's layout byte and firmware
+major/minor. New release aliases therefore appear in `get` without updating the
+CLI. A field absent on a selected ESC is refused by `set` for that channel.
+
+`set` accepts **raw bytes**, so `MOTOR_KV=25` stores byte 25 (displayed as 1020 KV
+in the web form). `MOTOR_KV=1020` is invalid. Multibyte scalar settings use
+comma-separated bytes in little-endian order; byte-array fields such as the
+startup melody keep their array representation.
+
 ## `--sim`
 
 Every command runs against a simulated flight controller and its ESCs, with no

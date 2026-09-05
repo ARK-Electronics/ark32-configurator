@@ -43,11 +43,12 @@ import { bytesEqual } from './bytes';
 import { VirtualClock, createSystemClock, type Clock } from './clock';
 import { decodeSettings, encodeSettings } from './eeprom/codec';
 import {
-    DEFAULTS_PRESERVED_FIELDS,
-    DEFAULT_SETTINGS_IMAGE,
-    DEFAULT_STARTUP_MELODY
+    DEFAULT_STARTUP_MELODY,
+    defaultSettings
 } from './eeprom/defaults';
 import { EEPROM_SIZE, EepromLayout, type EscSettings } from './eeprom/layout';
+import { contextFromImage, isPreservedOnDefaults, resolveSchema, validateSchema, type EepromSchema } from './eeprom/schema';
+import { bundledSchemaInfo, type LoadedSchema } from './eeprom/schema-loader';
 import { SessionError, causedBySessionError, describeError } from './errors';
 import {
     SessionEmitter,
@@ -197,6 +198,9 @@ export interface FlashOptions {
 }
 
 export interface Am32SessionOptions {
+    /** One validated living document, resolved separately for each connected ESC. */
+    schema?: EepromSchema;
+    schemaInfo?: LoadedSchema;
     transport: Transport;
     /** Real time in production, {@link VirtualClock} in tests. */
     clock?: Clock;
@@ -359,6 +363,9 @@ function isVerifyMismatch (error: unknown): boolean {
 }
 
 export class Am32Session {
+    readonly schema: EepromSchema;
+    readonly schemaInfo: LoadedSchema;
+    private readonly schemaLoggedTargets = new Set<number>();
     private readonly transport: Transport;
     private readonly clock: Clock;
     private readonly link: Link;
@@ -394,6 +401,9 @@ export class Am32Session {
     private tail: Promise<unknown> = Promise.resolve();
 
     constructor (options: Am32SessionOptions) {
+        this.schemaInfo = options.schemaInfo ?? (options.schema ? { schema: options.schema, source: 'bundled', sha256: 'provided' } : bundledSchemaInfo());
+        validateSchema(this.schemaInfo.schema);
+        this.schema = this.schemaInfo.schema;
         this.transport = options.transport;
         this.clock = options.clock ?? createSystemClock();
         this.passthroughSettleMs = Math.max(0, options.passthroughSettleMs ?? DEFAULT_PASSTHROUGH_SETTLE_MS);
@@ -737,7 +747,10 @@ export class Am32Session {
         // settings object that is about to be built out of it -- passing the
         // latter is what silently disabled version gating before block 1b.
         const layoutRevision = buffer[EepromLayout.LAYOUT_REVISION.offset] ?? 0;
-        info.settings = decodeSettings(buffer, layoutRevision);
+        const context = contextFromImage(buffer);
+        info.resolvedSchema = resolveSchema(this.schema, context);
+        info.settings = decodeSettings(buffer, layoutRevision, this.schema, context);
+        this.logSchema(target, buffer);
         info.settingsBuffer = buffer;
 
         const [valid, pin] = Mcu.parseBootLoaderPin(info.bootloader.input);
@@ -753,6 +766,13 @@ export class Am32Session {
         }
 
         return info;
+    }
+
+    private logSchema (target: number, image: Uint8Array): void {
+        if (this.schemaLoggedTargets.has(target)) { return; }
+        this.schemaLoggedTargets.add(target);
+        const context = contextFromImage(image);
+        this.emitter.emit('log', { level: 'info', message: `schema ${this.schema.version} sha256=${this.schemaInfo.sha256} (${this.schemaInfo.source}); ESC #${target + 1} layout ${context.layout} fw ${context.firmware}` });
     }
 
     /** The decoded settings for one channel. See {@link readEsc} for the image. */
@@ -806,26 +826,21 @@ export class Am32Session {
      * (`AM32/Src/settings.c:23-36`).
      */
     applyDefaults (target: number, options: ApplyDefaultsOptions = {}): Promise<WriteSettingsResult> {
-        const image = options.image ?? DEFAULT_SETTINGS_IMAGE;
         return this.exclusive(() => this.writeSettingsImpl(
             target,
-            (_base, escRevision) => {
-                const revision = options.layoutRevision ?? escRevision;
-                const patch = decodeSettings(image, revision);
-                for (const field of DEFAULTS_PRESERVED_FIELDS) {
-                    delete patch[field];
+            (base, escRevision) => {
+                const context = { ...contextFromImage(base), layout: options.layoutRevision ?? escRevision };
+                const resolved = resolveSchema(this.schema, context);
+                const patch = options.image
+                    ? decodeSettings(options.image, context.layout, this.schema, context)
+                    : defaultSettings(this.schema, context);
+                for (const [alias, field] of Object.entries(resolved.aliases)) {
+                    if (isPreservedOnDefaults(field)) { delete patch[alias]; }
                 }
-                // A 48-byte default image carries no melody, and *apply defaults*
-                // has always cleared it: `tune[0] == 0xFF` is the "no melody"
-                // marker (`AM32/Src/sounds.c:242`) and what a factory image ships.
-                // A caller who hands over a full 192-byte image with a tune in it
-                // keeps that tune.
-                patch.STARTUP_MELODY ??= [...DEFAULT_STARTUP_MELODY];
+                if (resolved.aliases.STARTUP_MELODY) { patch.STARTUP_MELODY ??= [...DEFAULT_STARTUP_MELODY]; }
                 this.emitter.emit('log', {
                     level: 'info',
-                    message: `ESC #${target + 1}: applying ${
-                        options.image ? `${image.length} bytes of supplied defaults` : 'AM32\'s built-in defaults'
-                    } as a layout-revision-${revision} image`
+                    message: `ESC #${target + 1}: applying ${options.image ? `${options.image.length} bytes of supplied defaults` : 'schema defaults'} as a layout-revision-${context.layout} image`
                 });
                 return patch;
             },
@@ -851,8 +866,9 @@ export class Am32Session {
             const eepromOffset = mcu.getEepromOffset();
 
             const base = await this.fourWay.readAddress(eepromOffset, EEPROM_SIZE);
+            this.logSchema(target, base);
             const layoutRevision = base[EepromLayout.LAYOUT_REVISION.offset] ?? 0;
-            const image = encodeSettings(base, patchFor(base, layoutRevision), layoutRevision);
+            const image = encodeSettings(base, patchFor(base, layoutRevision), layoutRevision, this.schema, contextFromImage(base));
 
             if (bytesEqual(image, base)) {
                 this.emitter.emit('log', {
@@ -864,7 +880,7 @@ export class Am32Session {
                     changed: false,
                     // The read this was built from is the proof.
                     verified: true,
-                    settings: decodeSettings(base, layoutRevision),
+                    settings: decodeSettings(base, layoutRevision, this.schema, contextFromImage(base)),
                     image: base
                 };
             }
@@ -887,7 +903,7 @@ export class Am32Session {
                 target,
                 changed: true,
                 verified: verify,
-                settings: decodeSettings(written, layoutRevision),
+                settings: decodeSettings(written, layoutRevision, this.schema, contextFromImage(written)),
                 image: written
             };
         });

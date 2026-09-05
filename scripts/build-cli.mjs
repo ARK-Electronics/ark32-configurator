@@ -27,6 +27,7 @@
  *   node scripts/build-cli.mjs --check   # verify the version, build nothing
  */
 
+import { execFileSync } from 'node:child_process';
 import { chmodSync, readFileSync, mkdirSync, rmSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -70,6 +71,9 @@ if (process.argv.includes('--check')) {
     process.stdout.write(`ark32 ${version}: version.ts and package.json agree\n`);
     process.exit(0);
 }
+
+// Direct release builds and workspace prepack also need fresh schema literals.
+execFileSync(process.execPath, [join(here, 'gen-eeprom-layout.ts')], { stdio: 'inherit' });
 
 // A stale bundle that looks fresh is the failure mode block 6 lost an hour to.
 rmSync(outDir, { recursive: true, force: true });

@@ -16,6 +16,7 @@
 
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { loadNodeSchema } from 'am32-node/eeprom-schema';
 import { SessionError, describeError } from 'am32-core/errors';
 import { DEFAULT_FIRMWARE_OWNER, DEFAULT_FIRMWARE_REPO } from 'am32-core/releases';
 import type { Transport } from 'am32-core/transport';
@@ -56,6 +57,11 @@ function pipeSafeWriter (stream: NodeJS.WriteStream): (text: string) => void {
 
 export function createNodeEnv (): CliEnv {
     return {
+        loadSchema: () => loadNodeSchema({
+            owner: process.env.GITHUB_FIRMWARE_OWNER || DEFAULT_FIRMWARE_OWNER,
+            repo: process.env.GITHUB_FIRMWARE_REPO || DEFAULT_FIRMWARE_REPO,
+            token: process.env.GITHUB_TOKEN || process.env.GH_TOKEN || null
+        }),
         stdout: pipeSafeWriter(process.stdout),
         stderr: pipeSafeWriter(process.stderr),
 

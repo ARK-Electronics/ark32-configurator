@@ -1,202 +1,125 @@
 <template>
-  <div
-    class="relative"
-    :class="{
-      'before:content-[\'\'] before:absolute before:inset-0 blur-[2px]': isDisabled
-    }"
-  >
-    <UFormGroup>
-      <template #label>
-        <div class="flex items-center gap-1 mb-1">
-          <div v-if="name">
-            {{ name }}
-          </div>
-          <UTooltip v-if="resolvedHelp" :popper="{ placement: 'right' }">
-            <UIcon name="i-material-symbols-help-outline" class="text-blue-500 text-lg" />
-            <template #text>
-              <p class="max-w-xs text-sm leading-snug">
-                {{ resolvedHelp }}
-              </p>
-            </template>
-          </UTooltip>
-        </div>
+  <div :class="{ 'opacity-50': isDisabled }">
+    <UFormGroup :label="definition.name || definition.key" :help="definition.description" :error="melodyError || undefined">
+      <template #hint>
+        <UButton v-if="definition.default && !definition.preserveOnDefaults" size="2xs" variant="ghost" :disabled="isDisabled" @click="resetField">
+          Reset
+        </UButton>
       </template>
-      <div v-if="type === 'select'">
-        <USelect v-model="value" :disabled="isDisabled" :options="options" :placeholder="placeholder" />
-      </div>
-      <UToggle v-else-if="type === 'bool'" v-model="boolValue" :disabled="isDisabled" />
-      <div v-else-if="type === 'number'">
-        <URange
-          v-model="value"
-          :disabled="isDisabled"
-          :min="min"
-          :max="max"
-          :step="step"
-          :color="disabledValue && value >= disabledValue ? 'orange' : 'primary'"
-        />
-      </div>
-      <div v-else-if="type === 'rtttl'">
-        <UTextarea v-model="rtttlValue" :disabled="isDisabled" variant="outline" color="primary" :placeholder="placeholder" />
-      </div>
-      <slot name="unit" :unit="unit" :value="value">
-        <div v-if="unit || showValue" class="flex">
-          <div v-if="disabledValue && value >= disabledValue">
-            DISABLED
-          </div>
-          <div v-else>
-            {{ (min || 0).toString().includes('.') ? (value * onlyDisplayFactor).toFixed(1) : value * onlyDisplayFactor }}
-          </div>
-          <div v-if="unit && (!disabledValue || value < disabledValue)">
-            {{ unit }}
-          </div>
+      <UCheckbox v-if="widget === 'checkbox'" v-model="boolValue" :disabled="isDisabled" :aria-label="definition.name || definition.key" />
+      <USelect v-else-if="widget === 'select'" v-model="value" :disabled="isDisabled" :options="options" />
+      <URadioGroup v-else-if="widget === 'radio'" v-model="value" :disabled="isDisabled" :options="options" />
+      <div v-else-if="widget === 'slider'" class="space-y-2">
+        <UCheckbox v-if="definition.disabledValue" v-model="limitEnabled" label="Enabled" :disabled="isDisabled" />
+        <URange v-model="value" :disabled="isDisabled || isOff" :min="bounds.min" :max="bounds.max" :step="bounds.step" />
+        <div v-if="isOff">
+          Disabled
         </div>
-      </slot>
-    </UFormGroup>
-    <div v-if="otherValues && otherValues.length > 0 && type !== 'rtttl'" class="absolute top-0 right-0 pt-1 flex gap-1">
-      <div v-for="(o, i) of otherValues" :key="i">
-        <div
-          class="w-[10px] h-[10px] rounded-full"
-          :class="{
-            'bg-green-500': getCompareValue(o) === value,
-            'bg-red-500': getCompareValue(o) !== value,
-          }"
+        <div v-else>
+          {{ value.toFixed(bounds.decimals) }} {{ definition.unit }}
+        </div>
+      </div>
+      <UTextarea v-else-if="widget === 'rtttl'" v-model="rtttlValue" :disabled="isDisabled" placeholder="RTTTL String" />
+      <div v-if="escInfo.length > 1 && widget !== 'rtttl'" class="flex gap-1 pt-2" aria-label="Selected ESC values">
+        <span
+          v-for="(esc, index) in escInfo"
+          :key="index"
+          class="w-2.5 h-2.5 rounded-full"
+          :class="esc.settings[alias] === rawValue ? 'bg-green-500' : 'bg-red-500'"
+          :title="`ESC ${index + 1}: ${esc.settings[alias]}`"
         />
       </div>
-    </div>
+    </UFormGroup>
   </div>
 </template>
 <script setup lang="ts">
 import Rtttl from 'bluejay-rtttl-parse';
-import { settingHelp } from 'am32-core/eeprom/guide';
-import type { EepromLayoutKeys } from 'am32-core/eeprom/layout';
+import { evaluatePredicate, fieldDefaultRaw, fromRaw, isDisabledRaw, toRaw } from 'am32-core/eeprom/schema';
+import type { ResolvedField, ResolvedSchema } from 'am32-core/eeprom/schema';
 import type { McuInfo } from 'am32-core/mcu';
+import { sliderBounds, widgetForField } from '~/utils/schema-settings';
+import type { SettingChange } from '~/utils/schema-settings';
 
-interface SettingFieldProps {
-    name?: string;
-    type: SettingsType;
+const props = withDefaults(defineProps<{
+    definition: ResolvedField;
+    schema: ResolvedSchema;
     escInfo: McuInfo[];
-    field: EepromLayoutKeys;
-    placeholder?: string;
-    description?: string;
-    help?: string;
-    options?: SettingsSelectOptionsType[];
-    min?: number;
-    max?: number;
-    step?: number;
-    displayFactor?: number;
-    onlyDisplayFactor?: number;
-    offset?: number;
-    unit?: string;
-    showValue?: boolean;
-    disabled?: boolean | ((value: number) => boolean),
-    disabledValue?: number,
-    individual?: number
-}
-
-const props = withDefaults(defineProps<SettingFieldProps>(), {
-    name: undefined,
-    displayFactor: 1,
-    onlyDisplayFactor: 1,
-    offset: 0,
-    placeholder: undefined,
-    description: undefined,
-    help: undefined,
-    options: undefined,
-    min: undefined,
-    max: undefined,
-    step: undefined,
-    unit: undefined,
-    showValue: false,
-    disabled: false,
-    individual: undefined,
-    disabledValue: undefined
-});
-
-const emits = defineEmits<{(e: 'change', value: { field: EepromLayoutKeys, value: number | number[], individual?: number }): void}>();
-
-const resolvedHelp = computed(() => props.help ?? settingHelp(props.field));
-
-const isDisabled = computed(() => {
-    if (props.disabled) {
-        if (typeof props.disabled === 'function') {
-            return props.disabled(value.value);
-        }
-        return props.disabled;
+    individual?: number;
+    disabled?: boolean;
+}>(), { individual: undefined, disabled: false });
+const emit = defineEmits<{(e: 'change', change: SettingChange): void}>();
+const alias = computed(() => props.definition.alias![0]);
+const info = computed(() => props.escInfo[props.individual ?? 0]);
+const rawValue = computed(() => info.value?.settings[alias.value]);
+const widget = computed(() => widgetForField(props.definition));
+const bounds = computed(() => sliderBounds(props.definition));
+const options = computed(() => props.definition.values?.map(entry => ({ value: entry.raw, label: entry.name })) ?? []);
+const isDisabled = computed(() => props.disabled || (props.definition.ui?.disabledWhen
+    ? evaluatePredicate(props.definition.ui.disabledWhen, info.value.settings, props.schema)
+    : false));
+const isOff = computed(() => typeof rawValue.value === 'number' && isDisabledRaw(props.definition, rawValue.value));
+const change = (value: number | number[]) => {
+    if (!isDisabled.value) {
+        emit('change', { field: alias.value, value, individual: props.individual });
     }
-    return false;
-});
-
-const value = computed({
-    get: () => {
-        let value = props.escInfo[props.individual ?? 0].settings[props.field] as number;
-        if (value && props.type === 'number') {
-            value = (value * props.displayFactor) + props.offset;
-        }
-        return value;
-    },
-    set: (val) => {
-        let value = val;
-        if (props.type === 'number') {
-            value = (value - props.offset) / props.displayFactor;
-        }
-        emits('change', {
-            field: props.field,
-            individual: props.individual,
-            value
-        });
-    }
-});
-
-const boolValue = computed({
-    get: () => {
-        return props.escInfo[props.individual ?? 0].settings[props.field] as number === 1;
-    },
-    set: (val) => {
-        value.value = val ? 1 : 0;
-    }
-});
-
-const getCompareValue = (value: number) => {
-    switch (props.type) {
-    case 'number':
-        return value * props.displayFactor + props.offset;
-    case 'rtttl':
-        return rtttlValue.value;
-    default:
-        break;
-    }
-
-    return value;
 };
-
-const otherValues = computed(() => props.escInfo?.map(i => i.settings[props.field]) as number[] ?? []);
-
-// The Simpsons:d=4,o=5,b=160:c.6,e6,f#6,8a6,g.6,e6,c6,8a,8f#,8f#,8f#,2g,8p,8p,8f#,8f#,8f#,8g,a#.,8c6,8c6,8c6,c6
+const value = computed({
+    get: () => widget.value === 'slider' ? fromRaw(props.definition, Number(rawValue.value)) : Number(rawValue.value),
+    set: (display: number | string) => change(widget.value === 'slider' ? toRaw(props.definition, Number(display)) : Number(display))
+});
+const boolValue = computed({
+    get: () => Number(rawValue.value) !== 0 && Number(rawValue.value) !== 255,
+    set: (enabled: boolean) => change(enabled ? 1 : 0)
+});
+const limitEnabled = computed({
+    get: () => !isOff.value,
+    set: (enabled: boolean) => {
+        if (!enabled) {
+            change(props.definition.disabledValue!.raw);
+            return;
+        }
+        const fallback = fieldDefaultRaw(props.definition);
+        const minimum = props.definition.raw?.min ?? 0;
+        change(typeof fallback === 'number' && !isDisabledRaw(props.definition, fallback)
+            ? fallback
+            : (isDisabledRaw(props.definition, minimum) ? minimum + 1 : minimum));
+    }
+});
+const resetField = () => {
+    const raw = fieldDefaultRaw(props.definition);
+    if (raw !== undefined) {
+        change(raw);
+    }
+};
+const melodyError = ref('');
 const rtttlValue = computed({
     get: () => {
-        let arr = props.escInfo[props.individual ?? 0].settings[props.field] as number[];
-
-        for (let i = 0; i < arr.length - 1; ++i) {
-            if (
-                (arr[i] === 0x0 && arr[i + 1] === 0x0) ||
-            (arr[i] === 0xFF && arr[i + 1] === 0xFF)
-            ) {
-                arr = arr.slice(0, i);
+        let bytes = Array.isArray(rawValue.value) ? rawValue.value : [];
+        for (let i = 0; i < bytes.length - 1; ++i) {
+            if ((bytes[i] === 0 && bytes[i + 1] === 0) || (bytes[i] === 255 && bytes[i + 1] === 255)) {
+                bytes = bytes.slice(0, i);
                 break;
             }
         }
-
-        return Rtttl.fromBluejayStartupMelody(new Uint8Array(arr));
+        try {
+            return Rtttl.fromBluejayStartupMelody(new Uint8Array(bytes));
+        } catch {
+            return '';
+        }
     },
-    set: (val) => {
-        if (val !== rtttlValue.value) {
-            const buffer: Uint8Array = Rtttl.toBluejayStartupMelody(val).data;
-            buffer.fill(0x0, 128);
-            emits('change', {
-                field: props.field,
-                value: Array.from(buffer),
-                individual: props.individual
-            });
+    set: (text: string) => {
+        try {
+            const { data, errorCodes } = Rtttl.toBluejayStartupMelody(text, props.definition.size);
+            if (errorCodes.includes(2)) {
+                throw new Error(`Melody exceeds ${props.definition.size} bytes`);
+            }
+            if (errorCodes.includes(1)) {
+                throw new Error('Melody contains an unsupported note');
+            }
+            melodyError.value = '';
+            change(Array.from(data));
+        } catch (error) {
+            melodyError.value = error instanceof Error ? error.message : 'Invalid RTTTL melody';
         }
     }
 });

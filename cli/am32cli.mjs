@@ -270,9 +270,20 @@ async function fourwaySuite (tty, hexPath) {
     escStore.expectedCount = passthrough?.data.getUint8(0) ?? 0;
     console.log('  4-way passthrough, %d ESC(s)', escStore.expectedCount);
 
-    const info = await FourWay.getInstance().getInfo(0, 20);
-    escStore.escData = [{ isError: false, data: info }];
-    summarize(info);
+    if (escStore.expectedCount < 1) {
+        throw new Error('4-way interface reported no ESCs');
+    }
+    escStore.escData = [];
+    for (let target = 0; target < escStore.expectedCount; target++) {
+        // the app's own budget, not a generous one: connectToEsc() in
+        // SerialDevice.vue calls getInfo(i) with the default initRetries,
+        // so a harness that passes 20 here hides every timeout the UI hits
+        const targetInfo = await FourWay.getInstance().getInfo(target);
+        escStore.escData.push({ isError: false, data: targetInfo });
+        console.log('  ESC %d discovered', target + 1);
+        summarize(targetInfo);
+    }
+    const info = escStore.escData[0].data;
 
     // settings write via writeSettings(), with a real change, then verify
     // through a fresh read and restore
@@ -297,6 +308,7 @@ async function fourwaySuite (tty, hexPath) {
     console.log('  flash done in %ds', ((Date.now() - t0) / 1000).toFixed(1));
     await FourWay.getInstance().reset(0);
     await delay(5000);
+    // post-flash reconnect: SerialDevice.vue passes 20 here, so mirror it
     const info2 = await FourWay.getInstance().getInfo(0, 20);
     summarize(info2);
     console.log('FOURWAY SUITE PASSED');

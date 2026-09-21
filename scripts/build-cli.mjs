@@ -73,7 +73,7 @@ if (process.argv.includes('--check')) {
 }
 
 // Direct release builds and workspace prepack also need fresh schema literals.
-execFileSync(process.execPath, [join(here, 'gen-eeprom-layout.ts')], { stdio: 'inherit' });
+execFileSync(process.execPath, [join(here, 'gen-eeprom-layout.mjs')], { stdio: 'inherit' });
 
 // A stale bundle that looks fresh is the failure mode block 6 lost an hour to.
 rmSync(outDir, { recursive: true, force: true });

@@ -38,7 +38,7 @@ scripts/assert-schema-sync.sh
 ```
 
 `SCHEMA_REF` contains the bundled file's SHA256. CI checks that copy and never
-requires a sibling firmware checkout. `scripts/gen-eeprom-layout.ts` emits
+requires a sibling firmware checkout. `scripts/gen-eeprom-layout.mjs` emits
 ignored `layout.generated.ts` and `schema.generated.ts`; package test, typecheck,
 development and build scripts generate them before consuming core code. The CLI
 build entry point also generates them for direct release/prepack builds.

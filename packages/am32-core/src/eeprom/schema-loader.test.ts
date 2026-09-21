@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 import { BUNDLED_SCHEMA } from './schema';
-import { bundledSchemaInfo, loadSchema } from './schema-loader';
+import { bundledSchemaInfo, loadSchema, type SchemaAsset } from './schema-loader';
 
 const sha256 = (text: string) => Promise.resolve(createHash('sha256').update(text).digest('hex'));
 function fixture () {
@@ -10,7 +10,7 @@ function fixture () {
     const json = JSON.stringify(schema);
     let cached: string | null = null;
     const download = vi.fn(() => Promise.resolve(json));
-    const latest = vi.fn(async () => ({ url: 'https://example.test/eeprom.json', sha256: await sha256(json) }));
+    const latest = vi.fn(async (): Promise<SchemaAsset | null> => ({ url: 'https://example.test/eeprom.json', sha256: await sha256(json) }));
     const cache = { read: () => Promise.resolve(cached), write: (text: string) => { cached = text; return Promise.resolve(); } };
     return { schema, json, options: { latest, download, sha256, cache }, setCached: (text: string) => { cached = text; } };
 }

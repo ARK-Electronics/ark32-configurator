@@ -6,6 +6,7 @@
  * `EEPROM_SIZE` (192) bytes, matching `EEprom_t`. See `eeprom/layout.ts`.
  */
 
+import type { ResolvedSchema } from './eeprom/schema';
 import type { McuSettings } from './eeprom/layout';
 
 export interface McuVariant {
@@ -19,6 +20,7 @@ export interface McuVariant {
 }
 
 export interface McuInfo {
+    resolvedSchema?: ResolvedSchema;
     meta: {
         signature: number;
         input: number;

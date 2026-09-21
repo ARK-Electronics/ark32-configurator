@@ -15,6 +15,7 @@
  * builds, which is exactly the divergence `--sim` exists to prevent.
  */
 
+import type { LoadedSchema } from 'am32-core/eeprom/schema-loader';
 import type { Transport } from 'am32-core/transport';
 import type { NodePortInfo } from 'am32-node/serialport-types';
 
@@ -40,6 +41,8 @@ export interface FirmwareSource {
 }
 
 export interface CliEnv {
+    /** Production loads latest metadata before opening a port. Tests omit this hook. */
+    loadSchema?(): Promise<LoadedSchema>
     /** Command output. One trailing newline per call is the caller's job. */
     stdout(text: string): void
     /** Diagnostics: session logs, progress, warnings. Never machine-read. */

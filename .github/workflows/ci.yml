@@ -62,6 +62,7 @@ jobs:
           bash scripts/assert-deleted.sh
           bash scripts/assert-core-hygiene.sh
           bash scripts/assert-fault-coverage.sh
+          bash scripts/assert-schema-sync.sh
 
       # `yarn test` covers all of this against `run()` in-process. This covers the
       # thing it cannot: that the *built* binary has it. Between the two sit the

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { finished } from 'node:stream/promises';
 import { Octokit } from 'octokit';
 import { coerce, compare } from 'semver';
@@ -56,7 +57,11 @@ export default async function (minTag?: string) {
                     console.log(`\t uploading ${asset.name}`);
                     const request = await fetch(asset.browser_download_url);
                     const blob = await request.blob();
-                    await minioClient.putObject('releases', `${releaseVersion}/${asset.name}`, Buffer.from(await blob.arrayBuffer()));
+                    const bytes = Buffer.from(await blob.arrayBuffer());
+                    await minioClient.putObject('releases', `${releaseVersion}/${asset.name}`, bytes, bytes.length, {
+                        'Content-Type': asset.name.endsWith('.json') ? 'application/json' : 'application/octet-stream',
+                        sha256: createHash('sha256').update(bytes).digest('hex')
+                    });
                 } else {
                     console.log(`\t found ${asset.name}, skipping ...`);
                 }

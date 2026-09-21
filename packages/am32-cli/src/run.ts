@@ -24,6 +24,7 @@
  * is virtual).
  */
 
+import { bundledSchemaInfo, type LoadedSchema } from 'am32-core/eeprom/schema-loader';
 import { createSystemClock, type Clock } from 'am32-core/clock';
 import { SessionError, describeError } from 'am32-core/errors';
 import { parseHex } from 'am32-core/hex';
@@ -44,7 +45,7 @@ import { createSimRig, driveVirtualClock } from './sim';
 import { commandEnumerate, commandInfo } from './commands/info';
 import { commandPorts } from './commands/ports';
 import {
-    SETTING_KEYS,
+    settingFields,
     commandDefaults,
     commandGet,
     commandRead,
@@ -137,9 +138,11 @@ async function dispatch (args: ParsedArgs, env: CliEnv, reporter: Reporter): Pro
     }
 
     // Pre-flight: everything that can be rejected without opening anything.
-    const assignments = args.command === 'set' ? parseAssignments(args.operands) : [];
+    const schemaInfo = args.globals.sim || !env.loadSchema ? bundledSchemaInfo() : await env.loadSchema();
+    const fields = settingFields(schemaInfo.schema);
+    const assignments = args.command === 'set' ? parseAssignments(args.operands, fields) : [];
     if (args.command === 'get') {
-        checkKeys(args.operands);
+        checkKeys(args.operands, Object.keys(fields));
     }
     const settingsImage = args.command === 'write' ? await readSettingsImage(args, env) : null;
     const hex = args.command === 'flash' && args.hex !== null ? await readHex(args, env) : null;
@@ -150,7 +153,7 @@ async function dispatch (args: ParsedArgs, env: CliEnv, reporter: Reporter): Pro
         ? await resolveRelease(args.release, env)
         : null;
 
-    return withRig(args, env, reporter, async (rig) => {
+    return withRig(args, env, reporter, schemaInfo, async (rig) => {
         // The two commands that address the FC rather than a channel, so neither
         // takes `--esc` and neither reaches the selector guard below.
         if (args.command === 'info') {
@@ -221,10 +224,10 @@ async function dispatch (args: ParsedArgs, env: CliEnv, reporter: Reporter): Pro
 
 // ---- pre-flight validation -------------------------------------------------
 
-function parseAssignments (operands: readonly string[]): Assignment[] {
+function parseAssignments (operands: readonly string[], fields: Record<string, { size: number; type?: string }>): Assignment[] {
     const assignments: Assignment[] = [];
     for (const operand of operands) {
-        const parsed = parseAssignment(operand);
+        const parsed = parseAssignment(operand, fields);
         if (typeof parsed === 'string') {
             throw new UsageError(parsed);
         }
@@ -233,9 +236,9 @@ function parseAssignments (operands: readonly string[]): Assignment[] {
     return assignments;
 }
 
-function checkKeys (keys: readonly string[]): void {
+function checkKeys (keys: readonly string[], available: readonly string[]): void {
     for (const key of keys) {
-        if (!SETTING_KEYS.includes(key)) {
+        if (!available.includes(key)) {
             throw new UsageError(
                 `unknown setting '${key}'. Run 'ark32 get --esc 1' with no keys to list them.`
             );
@@ -308,6 +311,7 @@ async function withRig (
     args: ParsedArgs,
     env: CliEnv,
     reporter: Reporter,
+    schemaInfo: LoadedSchema,
     work: (rig: Rig) => Promise<ExitCode>
 ): Promise<ExitCode> {
     const { globals } = args;
@@ -340,7 +344,7 @@ async function withRig (
 
     reporter.note(`using ${description}`);
 
-    const session = new Am32Session({ transport, clock, policy });
+    const session = new Am32Session({ transport, clock, policy, schemaInfo });
     session.on('log', event => reporter.log(event));
     session.on('progress', event => reporter.progress(event));
     // Under -v the state channel is what makes the teardown legible: a run that

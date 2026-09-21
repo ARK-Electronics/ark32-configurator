@@ -28,3 +28,7 @@ logs
 # Local Netlify folder
 .netlify
 stack.env
+# Build-only schema literals
+packages/am32-core/src/eeprom/*.generated.ts
+# Python bytecode from the optional firmware integration runner.
+__pycache__/

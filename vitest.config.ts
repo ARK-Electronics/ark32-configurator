@@ -7,7 +7,7 @@ import { defineConfig } from 'vitest/config';
 export default defineConfig({
     test: {
         environment: 'node',
-        include: ['packages/**/*.{test,spec}.ts'],
+        include: ['packages/**/*.{test,spec}.ts', 'tests/**/*.test.ts'],
         exclude: ['**/node_modules/**', '**/dist/**', '.nuxt/**', '.output/**'],
         // Protocol tests run against a virtual clock (block 2 onward), so a slow
         // test means a real hang, not a slow machine.

@@ -6,3 +6,6 @@ dist
 coverage
 prisma/generated
 public
+
+# Build-only schema literals
+packages/am32-core/src/eeprom/*.generated.ts

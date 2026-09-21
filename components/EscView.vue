@@ -88,10 +88,7 @@
       <div v-else-if="mcu" class="">
         <div v-if="mcu?.settingsBuffer[0] === 0x01">
           <div @click.stop>
-            <UCheckbox v-model="isReversed" label="Reversed" />
-          </div>
-          <div @click.stop>
-            <UCheckbox v-model="is3DMode" label="3D mode" />
+            <SchemaSettingsPanel panel="esc" :esc-info="[mcu]" :disabled="escStore.isBusy" @change="emit('change', { ...$event, index })" />
           </div>
         </div>
         <div v-if="mcu?.settingsBuffer[0] === 0x00" class="flex items-center justify-center gap-4">
@@ -106,7 +103,7 @@
   </div>
 </template>
 <script setup lang="ts">
-import type { EepromLayoutKeys } from 'am32-core/eeprom/layout';
+import type { SettingChange } from '~/utils/schema-settings';
 import { formatEscFirmwareVersion } from 'am32-core/firmware-version';
 import type { EscData } from 'am32-core/mcu';
 
@@ -116,7 +113,8 @@ const props = defineProps<{
     esc: EscData | null | undefined
 }>();
 
-const emit = defineEmits<{(e: 'change', value: { index: number, field: EepromLayoutKeys, value: boolean }): void,
+const escStore = useEscStore();
+const emit = defineEmits<{(e: 'change', value: SettingChange & { index: number }): void,
 (e: 'toggle', value: number): void
 }>();
 
@@ -131,31 +129,9 @@ const firmwareVersionLabel = computed(() => formatEscFirmwareVersion(
     mcu.value?.meta.am32.firmwareVersion
 ));
 
-const isReversed = computed({
-    get: () => (getSettingValue<number>('MOTOR_DIRECTION') ?? 0) === 1,
-    set (value) {
-        emit('change', {
-            index: props.index,
-            field: 'MOTOR_DIRECTION',
-            value
-        });
-    }
-});
-
-const is3DMode = computed({
-    get: () => (getSettingValue<number>('BIDIRECTIONAL_MODE') ?? 0) === 1,
-    set (value) {
-        emit('change', {
-            index: props.index,
-            field: 'BIDIRECTIONAL_MODE',
-            value
-        });
-    }
-});
-
 const layoutVersion = computed(() => getSettingValue<number>('LAYOUT_REVISION'));
 
-function getSettingValue<T> (name: EepromLayoutKeys): T | null {
+function getSettingValue<T> (name: string): T | null {
     return mcu.value?.settings[name] as T ?? null;
 }
 

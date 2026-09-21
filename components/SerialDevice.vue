@@ -819,12 +819,7 @@ const applyConfig = async () => {
     }
 
     const buffer = new Uint8Array(await files[0].arrayBuffer());
-    const settings = escSession.decodeSettingsFile(
-        buffer,
-        escStore.firstValidEscData?.data.settings.LAYOUT_REVISION as number
-    );
-
-    await escSession.applySettings(settings, savingOrApplyingSelectedEscs.value);
+    await escSession.applySettings(buffer, savingOrApplyingSelectedEscs.value);
 
     applyConfigFile.value.input.value = '';
     applyConfigModalOpen.value = false;

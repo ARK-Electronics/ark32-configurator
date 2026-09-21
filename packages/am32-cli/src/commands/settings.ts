@@ -8,9 +8,10 @@
  * with one sharp edge; see {@link imagePatch}.
  */
 
+import { BUNDLED_SCHEMA, contextFromImage, isPreservedOnDefaults, resolveSchema, type EepromSchema, type SchemaContext } from 'am32-core/eeprom/schema';
 import { decodeSettings } from 'am32-core/eeprom/codec';
 import { DEFAULTS_PRESERVED_FIELDS } from 'am32-core/eeprom/defaults';
-import { EEPROM_SIZE, EepromLayout, type EscSettings } from 'am32-core/eeprom/layout';
+import { EEPROM_SIZE, type EscSettings } from 'am32-core/eeprom/layout';
 import type { Am32Session, WriteSettingsResult } from 'am32-core/session';
 import type { McuInfo } from 'am32-core/mcu';
 import type { EscSelector } from '../args';
@@ -19,8 +20,15 @@ import { exitCodeForTargets } from '../exit';
 import { formatSettingValue, type CommandOutcome, type Reporter } from '../report';
 import { forEachTarget, summariseOutcome, type OutcomeSummary, type TargetOutcome } from './targets';
 
-/** Layout field names, for validating `get` and `set` keys before connecting. */
-export const SETTING_KEYS: readonly string[] = Object.keys(EepromLayout);
+/** Pre-connect aliases from the loaded living document; per-ESC presence is checked later. */
+export function settingFields (schema: EepromSchema): Record<string, { size: number; type?: string }> {
+    const fields: Record<string, { size: number; type?: string }> = {};
+    for (const field of Object.values(schema.fields)) {
+        if (field.alias?.[0]) { fields[field.alias[0]] = field; }
+    }
+    fields.CAN_SETTINGS = { size: 16 };
+    return fields;
+}
 
 /**
  * The one field `set` refuses.
@@ -43,7 +51,7 @@ export interface Assignment {
 }
 
 /** `KEY=VALUE` from the command line, or a message for exit code 3. */
-export function parseAssignment (operand: string): Assignment | string {
+export function parseAssignment (operand: string, fields: Record<string, { size: number; type?: string }> = settingFields(BUNDLED_SCHEMA)): Assignment | string {
     const eq = operand.indexOf('=');
     if (eq < 1) {
         return `set needs KEY=VALUE, got '${operand}'`;
@@ -52,7 +60,7 @@ export function parseAssignment (operand: string): Assignment | string {
     const key = operand.slice(0, eq);
     const raw = operand.slice(eq + 1);
 
-    const field = (EepromLayout as Record<string, { size: number } | undefined>)[key];
+    const field = Object.hasOwn(fields, key) ? fields[key] : undefined;
     if (!field) {
         return `unknown setting '${key}'. 'ark32 get --esc 1' lists every name this ESC has.`;
     }
@@ -85,6 +93,11 @@ export function parseAssignment (operand: string): Assignment | string {
 
     if (bytes.length > field.size) {
         return `${key} is ${field.size} bytes; got ${bytes.length} values`;
+    }
+    if (field.type && !['reserved', 'bluejay'].includes(field.type)) {
+        let value = bytes.reduce((sum, byte, i) => sum + byte * (256 ** i), 0);
+        if (field.type.startsWith('int') && value >= 2 ** (field.size * 8 - 1)) { value -= 2 ** (field.size * 8); }
+        return { key, value };
     }
     return { key, value: bytes };
 }
@@ -119,10 +132,10 @@ export function parseAssignment (operand: string): Assignment | string {
  * And `ark32 set` can still write four of the six explicitly, one field at a time,
  * where the user has named it and the CLI warns.
  */
-export function imagePatch (image: Uint8Array, layoutRevision: number): Partial<EscSettings> {
-    const patch = decodeSettings(image, layoutRevision);
-    for (const field of DEFAULTS_PRESERVED_FIELDS) {
-        delete patch[field];
+export function imagePatch (image: Uint8Array, layoutRevision: number, schema = BUNDLED_SCHEMA, context: SchemaContext = { ...contextFromImage(image), layout: layoutRevision }): Partial<EscSettings> {
+    const patch = decodeSettings(image, layoutRevision, schema, context);
+    for (const [alias, field] of Object.entries(resolveSchema(schema, context).aliases)) {
+        if (isPreservedOnDefaults(field)) { delete patch[alias]; }
     }
     return patch;
 }
@@ -292,7 +305,16 @@ export async function commandSet (
     const outcomes = await forEachTarget(
         selector,
         escCount,
-        target => session.writeSettings(target, patch, { verify })
+        async (target) => {
+            const info = await session.readEsc(target);
+            const aliases = info.resolvedSchema?.aliases ?? resolveSchema(session.schema, contextFromImage(info.settingsBuffer)).aliases;
+            for (const assignment of assignments) {
+                if (!Object.hasOwn(aliases, assignment.key)) {
+                    throw new Error(`${assignment.key} is not present on this ESC's layout/firmware`);
+                }
+            }
+            return session.writeSettings(target, patch, { verify });
+        }
     );
     return writeOutcome(outcomes, reporter, 'written');
 }
@@ -322,7 +344,7 @@ export async function commandWrite (
         // `settings.test.ts`.
         const info: McuInfo = await session.readEsc(target);
         const layoutRevision = (info.settings.LAYOUT_REVISION as number | undefined) ?? 0;
-        return session.writeSettings(target, imagePatch(image, layoutRevision), { verify });
+        return session.writeSettings(target, imagePatch(image, layoutRevision, session.schema, contextFromImage(info.settingsBuffer)), { verify });
     });
     return writeOutcome(outcomes, reporter, 'applied');
 }

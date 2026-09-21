@@ -38,11 +38,16 @@ export async function loadSchema (options: SchemaLoaderOptions): Promise<LoadedS
     try {
         const asset = await options.latest();
         if (!asset) { return cached ?? bundledSchemaInfo(); }
-        const digest = asset.sha256?.replace(/^sha256:/, '').toLowerCase();
+        const digest = asset.sha256?.replace(/^sha256:/i, '').toLowerCase();
+        // A body with no published digest can be swapped on the wire. Do not download or cache it.
+        if (!digest || !/^[a-f0-9]{64}$/.test(digest)) {
+            options.log?.('EEPROM release asset has no SHA256; keeping the cache or bundle');
+            return cached ?? bundledSchemaInfo();
+        }
         if (cached && digest === cached.sha256) { return cached; }
         const json = await options.download(asset.url);
         const sha256 = await options.sha256(json);
-        if (digest && sha256 !== digest) { throw new Error('EEPROM release asset SHA256 mismatch'); }
+        if (sha256 !== digest) { throw new Error('EEPROM release asset SHA256 mismatch'); }
         const schema: unknown = JSON.parse(json);
         // Refuse unsupported languages even with a warm cache: use the known bundle.
         try { validateSchema(schema); } catch (error) {

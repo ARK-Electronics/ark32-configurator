@@ -11,8 +11,9 @@ The loader validates byte coverage, storage widths, disjoint version ranges,
 aliases, group membership, and predicates before accepting metadata. Schema
 language major versions other than 1 are refused in favor of the bundled schema.
 It stores one JSON file and computes its SHA256, skipping asset downloads when
-release metadata reports the cached digest. Failed refreshes use a valid cache;
-a cold cache, no release asset, and simulation/tests use the bundle.
+release metadata reports the cached digest. An asset with no SHA256 digest is
+not downloaded. Failed refreshes use a valid cache; a cold cache, no release
+asset, and simulation/tests use the bundle.
 
 Caches live at `~/.cache/ark32/eeprom.json` for the CLI and
 `.cache/ark32/eeprom.json` for the server. `ARK32_SCHEMA_CACHE_DIR` overrides the

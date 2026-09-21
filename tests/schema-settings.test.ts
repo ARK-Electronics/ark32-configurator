@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { escSchemaCohorts, panelGroups, portableSettingsPatch, sliderBounds, widgetForField } from '../utils/schema-settings';
+import { escSchemaCohorts, panelGroups, portableSettingsPatch, sliderBounds, sliderCaption, widgetForField } from '../utils/schema-settings';
 import { BUNDLED_SCHEMA, evaluatePredicate, fieldDefaultRaw, fromRaw, isDisabledRaw, resolveSchema, toRaw, validateSchema } from 'am32-core/eeprom/schema';
 import type { EepromSchema, ResolvedSchema } from 'am32-core/eeprom/schema';
 import { createMcuInfo } from 'am32-core/mcu';
@@ -60,6 +60,16 @@ describe('schema settings render model', () => {
         expect(toRaw(schema.fields.motorKv, 1020)).toBe(25);
         expect(toRaw(schema.fields.motorKv, 1041)).toBe(26);
         expect(sliderBounds(schema.fields.servoNeutral).max).toBe(1629);
+    });
+
+    it('shows the variable PWM band and treats zero active brake as off', () => {
+        const schema = resolve();
+        const pwm = schema.fields.pwmFrequency;
+        expect(sliderCaption(pwm, 24, 0, 1)).toBe('24 kHz - 48 kHz');
+        expect(sliderCaption(pwm, 24, 0, 0)).toBe('24 kHz');
+        expect(sliderCaption(pwm, 24, 0, 2)).toBe('24 kHz');
+        expect(sliderCaption(schema.fields.activeBrakePower, 0, 0, undefined)).toBe('Off');
+        expect(sliderCaption(schema.fields.activeBrakePower, 2, 0, undefined)).toBe('2 %');
     });
 
     it('preserves checkbox overrides and car reverse predicate', () => {

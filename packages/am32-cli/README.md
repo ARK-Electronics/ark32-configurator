@@ -48,8 +48,9 @@ like `1,3`.
 Before connecting, the CLI fetches `eeprom.json` from the latest ARK32 release.
 It validates the schema language and byte layout, then caches the JSON at
 `~/.cache/ark32/eeprom.json`. An unchanged release SHA256 avoids downloading it
-again. Offline runs use a valid cache or the bundled schema. `--sim` uses the
-bundle without network access.
+again. A release asset with no SHA256 digest is ignored. Offline runs use a
+valid cache or the bundled schema. `--sim` uses the bundle without network
+access.
 
 One schema resolves separately against each ESC's layout byte and firmware
 major/minor. New release aliases therefore appear in `get` without updating the

@@ -52,6 +52,31 @@ export function sliderBounds (field: ResolvedField) {
     };
 }
 
+function formatSliderValue (field: ResolvedField, display: number, decimals: number): string {
+    const number = display.toFixed(decimals);
+    return field.unit ? `${number} ${field.unit}` : number;
+}
+
+/**
+ * Slider readout. Variable PWM sweeps from the set frequency to twice that.
+ * Active brake power of 0 is off, not a 0% duty.
+ */
+export function sliderCaption (
+    field: ResolvedField,
+    display: number,
+    decimals: number,
+    variablePwm: number | undefined
+): string {
+    if (field.key === 'activeBrakePower' && display === 0) {
+        return 'Off';
+    }
+    const text = formatSliderValue(field, display, decimals);
+    if (field.key === 'pwmFrequency' && variablePwm === 1) {
+        return `${text} - ${formatSliderValue(field, display * 2, decimals)}`;
+    }
+    return text;
+}
+
 /** Keep independently resolved ranges separate on mixed-firmware boards. */
 export function escSchemaCohorts (infos: McuInfo[]) {
     const cohorts = new Map<string, { key: string; label: string; escInfo: McuInfo[] }>();

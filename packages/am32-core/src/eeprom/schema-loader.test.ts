@@ -40,6 +40,20 @@ describe('latest EEPROM release asset policy', () => {
         options.download.mockResolvedValueOnce(incompatible);
         expect(await loadSchema(options)).toEqual(bundledSchemaInfo());
     });
+    it('keeps the cache or bundle when the release asset has no SHA256', async () => {
+        const { options, schema } = fixture();
+        options.latest.mockResolvedValueOnce({ url: 'https://example.test/eeprom.json' });
+        expect(await loadSchema(options)).toEqual(bundledSchemaInfo());
+        expect(options.download).not.toHaveBeenCalled();
+
+        await loadSchema(options);
+        expect(options.download).toHaveBeenCalledTimes(1);
+        options.latest.mockResolvedValueOnce({ url: 'https://example.test/other.json', sha256: 'not-a-digest' });
+        const kept = await loadSchema(options);
+        expect(kept.source).toBe('cached');
+        expect(kept.schema).toEqual(schema);
+        expect(options.download).toHaveBeenCalledTimes(1);
+    });
     it('refuses corrupt cache and asset digests', async () => {
         const { options, setCached } = fixture();
         setCached('invalid');

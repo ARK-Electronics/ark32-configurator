@@ -37,7 +37,7 @@ def main():
     from test_eeprom_schema import _fetch, _write, _wait_for_esc, zero_throttle_can
     from test_params import _get_param, _request_wait, _set_param
 
-    subprocess.run([args.node, str(configurator / 'scripts' / 'gen-eeprom-layout.ts')],
+    subprocess.run([args.node, str(configurator / 'scripts' / 'gen-eeprom-layout.mjs')],
                    cwd=configurator, check=True)
     with tempfile.TemporaryDirectory(prefix='ark32-schema-integration-') as temporary:
         workdir = Path(temporary)

@@ -12,4 +12,4 @@ target = pathlib.Path('packages/am32-core/src/eeprom/eeprom.json')
 target.write_bytes(source)
 pathlib.Path('SCHEMA_REF').write_text(hashlib.sha256(source).hexdigest() + '\n')
 PY
-node scripts/gen-eeprom-layout.ts
+node scripts/gen-eeprom-layout.mjs

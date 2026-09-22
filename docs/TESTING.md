@@ -41,7 +41,7 @@ session layer needs that a transport cannot provide shows up immediately as a
 hole in it rather than as a workaround above it.
 
 Its fidelity comes from the firmware sources, all checked out locally and listed
-in `CLAUDE.md`. Read them with a subagent; they are large and you need one answer
+in `AGENTS.md`. Read them with a subagent; they are large and you need one answer
 from each.
 
 **Everything runs on a virtual clock.** `packages/am32-core/src/clock.ts`

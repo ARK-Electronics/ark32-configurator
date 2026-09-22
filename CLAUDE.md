@@ -61,12 +61,12 @@ step, because it is published and shipped as binaries.
   **`origin` is upstream** (`am32-firmware/am32-configurator`). Push and open
   PRs against `ark` only — `gh` has no default repo set, so always pass
   `--repo ARK-Electronics/ark32-configurator`.
-- Default branch: **`ark-release`**. Branch from it and open PRs against it.
+- Default branch: **`main`**. Branch from it and open PRs against it.
   Nothing gets pushed until `yarn verify` passes.
 
 ## Deploy
 
-Merging to `ark-release` deploys https://ark32.arkelectron.com automatically, via Sevalla (Kinsta's app hosting). Sevalla builds on Node 22.14, which cannot execute `.ts` files, so every script `yarn build` runs must be plain JavaScript.
+Merging to `main` deploys https://ark32.arkelectron.com automatically, via Sevalla (Kinsta's app hosting). Sevalla builds on Node 22.14, which cannot execute `.ts` files, so every script `yarn build` runs must be plain JavaScript.
 
 ## Gotchas
 
@@ -81,7 +81,7 @@ Merging to `ark-release` deploys https://ark32.arkelectron.com automatically, vi
 
 Read your local checkouts of these repos:
 
-- ARK32 (`ARK-Electronics/ARK32`, branch `ark-release`): `schema/eeprom.json` is the authority on the 192-byte EEPROM layout. The C header is generated from it at build time.
+- ARK32 (`ARK-Electronics/ARK32`, branch `main`): `schema/eeprom.json` is the authority on the 192-byte EEPROM layout. The C header is generated from it at build time.
 - ARK32 bootloader (`ARK-Electronics/ARK32-bootloader`)
 - ArduPilot: `libraries/AP_BLHeli/AP_BLHeli.cpp`, `libraries/GCS_MAVLink/GCS_Common.cpp`
 - Betaflight: `src/main/io/serial_4way.c`, `src/main/io/serial_4way_avrootloader.c`, `src/main/msp/msp.c`

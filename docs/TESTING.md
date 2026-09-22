@@ -224,7 +224,7 @@ anything ran on hardware:
 - **The settings read is 192 bytes, not 184** (block 1b). Still inside the
   firmware's 256-param limit and inside the EEPROM page on every variant.
 - **Version gating went from disabled to enabled** (block 1b). On ARK hardware
-  this changes nothing — `ark-release` writes `eeprom_version = 3` — but on a
+  this changes nothing — ARK32 writes `eeprom_version = 3` — but on a
   layout-revision-2 ESC the eight fields at 0x05–0x0C now render blank instead of
   showing bytes that meant something else.
 - **Native timers instead of the Web Worker "HackTimer"** the deleted Web Serial

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { escSchemaCohorts, panelGroups, portableSettingsPatch, sliderBounds, sliderCaption, widgetForField } from '../utils/schema-settings';
+import { escSchemaCohorts, panelGroups, portableSettingsPatch, rawFromInput, sliderBounds, sliderCaption, widgetForField } from '../utils/schema-settings';
+import { encode } from 'am32-core/eeprom/codec';
 import { BUNDLED_SCHEMA, evaluatePredicate, fieldDefaultRaw, fromRaw, isDisabledRaw, resolveSchema, toRaw, validateSchema } from 'am32-core/eeprom/schema';
 import type { EepromSchema, ResolvedSchema } from 'am32-core/eeprom/schema';
 import { createMcuInfo } from 'am32-core/mcu';
@@ -60,6 +61,15 @@ describe('schema settings render model', () => {
         expect(toRaw(schema.fields.motorKv, 1020)).toBe(25);
         expect(toRaw(schema.fields.motorKv, 1041)).toBe(26);
         expect(sliderBounds(schema.fields.servoNeutral).max).toBe(1629);
+    });
+
+    it('encodes a protocol picked from the select, which reports a string', () => {
+        const schema = resolve();
+        const raw = rawFromInput(schema.fields.inputType, '2');
+        expect(raw).toBe(2);
+        const image = encode({ ESC_PROTOCOL: raw }, BUNDLED_SCHEMA, new Uint8Array(BUNDLED_SCHEMA.bufferSize), schema.context);
+        expect(image[schema.fields.inputType.offset]).toBe(2);
+        expect(rawFromInput(schema.fields.motorKv, '1020')).toBe(25);
     });
 
     it('shows the variable PWM band and treats zero active brake as off', () => {

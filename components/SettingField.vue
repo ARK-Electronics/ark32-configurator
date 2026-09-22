@@ -34,10 +34,10 @@
 </template>
 <script setup lang="ts">
 import Rtttl from 'bluejay-rtttl-parse';
-import { evaluatePredicate, fieldDefaultRaw, fromRaw, isDisabledRaw, toRaw } from 'am32-core/eeprom/schema';
+import { evaluatePredicate, fieldDefaultRaw, fromRaw, isDisabledRaw } from 'am32-core/eeprom/schema';
 import type { ResolvedField, ResolvedSchema } from 'am32-core/eeprom/schema';
 import type { McuInfo } from 'am32-core/mcu';
-import { sliderBounds, sliderCaption, widgetForField } from '~/utils/schema-settings';
+import { rawFromInput, sliderBounds, sliderCaption, widgetForField } from '~/utils/schema-settings';
 import type { SettingChange } from '~/utils/schema-settings';
 
 const props = withDefaults(defineProps<{
@@ -65,7 +65,7 @@ const change = (value: number | number[]) => {
 };
 const value = computed({
     get: () => widget.value === 'slider' ? fromRaw(props.definition, Number(rawValue.value)) : Number(rawValue.value),
-    set: (display: number | string) => change(widget.value === 'slider' ? toRaw(props.definition, Number(display)) : Number(display))
+    set: (display: number | string) => change(rawFromInput(props.definition, display))
 });
 const variablePwm = computed(() => {
     const alias = props.schema.fields.variablePwmFreq?.alias?.[0];

@@ -8,11 +8,11 @@
  * on a record rather than on `if (variant === ...)` scattered through the flow.
  *
  * Every field carries its firmware citation, re-read against the current trees:
- *   AP  = `~/code/jake/ardupilot/libraries/AP_BLHeli/AP_BLHeli.cpp`
- *   GCS = `~/code/jake/ardupilot/libraries/GCS_MAVLink/GCS_Common.cpp`
- *   BF  = `~/code/ark/betaflight/src/main/io/serial_4way.c`
- *   BFm = `~/code/ark/betaflight/src/main/msp/msp.c`
- *   BFs = `~/code/ark/betaflight/src/main/msp/msp_serial.c`
+ *   AP  = `ardupilot/libraries/AP_BLHeli/AP_BLHeli.cpp`
+ *   GCS = `ardupilot/libraries/GCS_MAVLink/GCS_Common.cpp`
+ *   BF  = `betaflight/src/main/io/serial_4way.c`
+ *   BFm = `betaflight/src/main/msp/msp.c`
+ *   BFs = `betaflight/src/main/msp/msp_serial.c`
  *
  * Two facts that are true of *both* firmwares, so they are written down here
  * rather than turned into fields nothing branches on:

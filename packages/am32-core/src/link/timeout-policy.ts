@@ -10,7 +10,7 @@
  * Every constant below is a firmware fact with a citation. If you change one,
  * change it because the firmware changed.
  *
- * ArduPilot (`~/code/jake/ardupilot/libraries/AP_BLHeli/AP_BLHeli.cpp`):
+ * ArduPilot (`ardupilot/libraries/AP_BLHeli/AP_BLHeli.cpp`):
  *   :593   soft serial to the ESCs is 19200 8N1
  *   :705   `BL_ReadBuf` -> `serial_read_bytes(buf, req_bytes, req_bytes * 1000)`
  *          microseconds, i.e. 1 ms per byte, over `len + 3` bytes when the MCU
@@ -24,7 +24,7 @@
  *   :592   `MSP_SET_PASSTHROUGH` declares `EXPECT_DELAY_MS(1000)` and replies
  *          only after `serial_setup_output` returns
  *
- * Betaflight (`~/code/ark/betaflight/src/main/io/serial_4way_avrootloader.c`):
+ * Betaflight (`betaflight/src/main/io/serial_4way_avrootloader.c`):
  *   :69    `START_BIT_TIMEOUT_MS 2` -- a per-byte start-bit timeout, so a read
  *          of n bytes can take 2 ms per byte, twice ArduPilot's budget
  *   :275   `BL_SendCMDSetBuffer` header ACK `BL_GetACK(2)` (~4 ms)

@@ -64,6 +64,10 @@ step, because it is published and shipped as binaries.
 - Default branch: **`ark-release`**. Branch from it and open PRs against it.
   Nothing gets pushed until `yarn verify` passes.
 
+## Deploy
+
+Merging to `ark-release` deploys https://ark32.arkelectron.com automatically, via Sevalla (Kinsta's app hosting). Sevalla builds on Node 22.14, which cannot execute `.ts` files, so every script `yarn build` runs must be plain JavaScript.
+
 ## Gotchas
 
 - `yarn lint` has a dozen-odd `no-console` warnings on purpose (protocol and
@@ -73,15 +77,14 @@ step, because it is published and shipped as binaries.
 - The audit line references in issue #3 were written against commit `4094dad`.
   Re-verify them before trusting them; the overhaul moved most of that code.
 
-## Firmware sources (local, for verifying protocol claims)
+## Firmware sources (for verifying protocol claims)
 
-- AM32: `~/code/ark/ARK32` (branch `ark-release`) — `Inc/eeprom.h` is the
-  authority on the 192-byte `EEprom_t`.
-- AM32 bootloader: `~/code/ark/AM32-bootloader`
-- ArduPilot: `~/code/jake/ardupilot` — `libraries/AP_BLHeli/AP_BLHeli.cpp`,
-  `libraries/GCS_MAVLink/GCS_Common.cpp`
-- Betaflight: `~/code/ark/betaflight` — `src/main/io/serial_4way.c`,
-  `src/main/io/serial_4way_avrootloader.c`, `src/main/msp/msp.c`
+Read your local checkouts of these repos:
+
+- ARK32 (`ARK-Electronics/ARK32`, branch `ark-release`): `schema/eeprom.json` is the authority on the 192-byte EEPROM layout. The C header is generated from it at build time.
+- ARK32 bootloader (`ARK-Electronics/ARK32-bootloader`)
+- ArduPilot: `libraries/AP_BLHeli/AP_BLHeli.cpp`, `libraries/GCS_MAVLink/GCS_Common.cpp`
+- Betaflight: `src/main/io/serial_4way.c`, `src/main/io/serial_4way_avrootloader.c`, `src/main/msp/msp.c`
 
 Read these with a subagent rather than in the main context — they are large and
 you only need the answer.

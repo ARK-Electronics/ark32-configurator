@@ -19,7 +19,7 @@
  *
  * ## Why `node_modules` is copied rather than installed
  *
- * `CLAUDE.md` forbids `npm install` in this repo, and it does not need one:
+ * `AGENTS.md` forbids `npm install` in this repo, and it does not need one:
  * `@serialport/bindings-cpp` ships prebuilds for *every* target inside its own
  * tarball (`prebuilds/linux-x64`, `darwin-x64+arm64`, `win32-x64`, ...), so the
  * copy Yarn already installed is correct for all five. That also means this script

@@ -194,7 +194,7 @@ jobs:
 
       # `npm publish` rather than `yarn npm publish` so that what is published is
       # the tarball the step above just ran, not a fresh pack of the workspace.
-      # (CLAUDE.md's "never npm install" is about this repo's dependencies; nothing
+      # (AGENTS.md's "never npm install" is about this repo's dependencies; nothing
       # here installs anything.)
       - name: Publish
         env:

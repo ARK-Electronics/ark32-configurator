@@ -7,11 +7,11 @@
  * someone's bench.
  *
  * Every field carries its firmware citation. Read with subagents against:
- *   AP  = `~/code/jake/ardupilot/libraries/AP_BLHeli/AP_BLHeli.cpp`
- *   GCS = `~/code/jake/ardupilot/libraries/GCS_MAVLink/GCS_Common.cpp`
- *   BF  = `~/code/ark/betaflight/src/main/io/serial_4way.c`
- *   BFm = `~/code/ark/betaflight/src/main/msp/msp.c`
- *   BFs = `~/code/ark/betaflight/src/main/msp/msp_serial.c`
+ *   AP  = `ardupilot/libraries/AP_BLHeli/AP_BLHeli.cpp`
+ *   GCS = `ardupilot/libraries/GCS_MAVLink/GCS_Common.cpp`
+ *   BF  = `betaflight/src/main/io/serial_4way.c`
+ *   BFm = `betaflight/src/main/msp/msp.c`
+ *   BFs = `betaflight/src/main/msp/msp_serial.c`
  */
 
 export type FcProfileName = 'ardupilot' | 'betaflight';

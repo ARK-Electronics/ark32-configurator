@@ -17,8 +17,8 @@
  * quantity the timeout policy is derived from, so it is the quantity that has to
  * be real.
  *
- * Verified against `~/code/ark/AM32-bootloader/bootloader/main.c` (`BL:` below)
- * and `~/code/ark/AM32-bootloader/Mcu/f051/Src/eeprom.c` (`EE:`), read with a
+ * Verified against `AM32-bootloader/bootloader/main.c` (`BL:` below)
+ * and `AM32-bootloader/Mcu/f051/Src/eeprom.c` (`EE:`), read with a
  * subagent. The surprising ones, all of which a naive simulator gets wrong:
  *
  *  - **`CMD_ERASE_FLASH` (0x02) is a stub.** It validates the CRC and the

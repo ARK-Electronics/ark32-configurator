@@ -63,6 +63,7 @@ step, because it is published and shipped as binaries.
   `--repo ARK-Electronics/ark32-configurator`.
 - Default branch: **`main`**. Branch from it and open PRs against it.
   Nothing gets pushed until `yarn verify` passes.
+- `upstream_main` is upstream's `master`, fast-forwarded nightly by `sync-upstream.yml`. Never commit to it.
 
 ## Deploy
 

@@ -1,4 +1,4 @@
-import { BUNDLED_SCHEMA, contextFromImage, resolveSchema, evaluatePredicate, fromRaw } from 'am32-core/eeprom/schema';
+import { BUNDLED_SCHEMA, contextFromImage, resolveSchema, evaluatePredicate, fromRaw, toRaw } from 'am32-core/eeprom/schema';
 import type { ResolvedField, ResolvedSchema } from 'am32-core/eeprom/schema';
 import type { McuInfo } from 'am32-core/mcu';
 
@@ -27,6 +27,15 @@ export function widgetForField (field: ResolvedField): SettingWidget | undefined
     case 'bluejay': return 'rtttl';
     default: return undefined;
     }
+}
+
+/**
+ * A native `<select>` reports its value as a string, and the codec rejects
+ * anything but a number, so every scalar edit goes through here.
+ */
+export function rawFromInput (field: ResolvedField, input: number | string): number {
+    const display = Number(input);
+    return widgetForField(field) === 'slider' ? toRaw(field, display) : display;
 }
 
 /** The same render model drives every panel; future aliases need no Vue binds. */

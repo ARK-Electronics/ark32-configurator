@@ -75,7 +75,7 @@ step, because it is published and shipped as binaries.
 
 ## Firmware sources (local, for verifying protocol claims)
 
-- AM32: `~/code/ark/AM32` (branch `ark-release`) — `Inc/eeprom.h` is the
+- AM32: `~/code/ark/ARK32` (branch `ark-release`) — `Inc/eeprom.h` is the
   authority on the 192-byte `EEprom_t`.
 - AM32 bootloader: `~/code/ark/AM32-bootloader`
 - ArduPilot: `~/code/jake/ardupilot` — `libraries/AP_BLHeli/AP_BLHeli.cpp`,

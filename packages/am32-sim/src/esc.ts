@@ -107,6 +107,11 @@ const COMMAND_BYTES = 4 + 1;
 /** A read reply is `n` bytes + CRC16 + `brSUCCESS` (BL:654-663). */
 const READ_OVERHEAD_BYTES = 3;
 
+/** ARK's startup tune: "ARK" in morse, 28 units of 50 ms (ARK32 `Src/sounds.c:122,183-195`). */
+export const ESC_STARTUP_TUNE_MS = 1400;
+/** Zero throttle the application needs before it arms (ARK32 `Src/control_loop.c:580-582`). */
+export const ESC_ARM_MS = 1000;
+
 export interface SimEscOptions {
     /**
      * The signature the host decodes from `cmd_DeviceInitFlash`, i.e.
@@ -414,6 +419,7 @@ export class SimEsc {
         }
 
         this.connected = true;
+        this.enterBootloader();
         return {
             ack: 'ok',
             data: Uint8Array.from([
@@ -596,7 +602,7 @@ export class SimEsc {
      * the name it *runs the application* -- and AM32 sends no reply at all
      * (BL:496-501), which is why the FC does not wait for one.
      */
-    reset (): EscResult {
+    reset (now?: number): EscResult {
         this.counts.reset += 1;
         const duration = this.wire(COMMAND_BYTES - 1);
         if (this.unresponsive) {
@@ -605,6 +611,7 @@ export class SimEsc {
         this.connected = false;
         this.address = 0;
         this.buffer = new Uint8Array(0);
+        this.startApplication(now ?? Number.NEGATIVE_INFINITY);
         return this.ok(duration);
     }
 
@@ -616,6 +623,84 @@ export class SimEsc {
     /** The FC dropped the link -- `setDisconnected`. */
     disconnect (): void {
         this.connected = false;
+    }
+
+    // ---- the application, as the motor sees it -----------------------------
+    //
+    // Only what decides whether the motor turns. The application starts with
+    // its startup tune, and arms only after its input has read zero throttle
+    // for a second (`armed_timeout_count > LOOP_FREQUENCY_HZ` with
+    // `zero_input_count > 30`, ARK32 `Src/control_loop.c:576-582`). A
+    // bootloader ignores the throttle signal altogether, so an ESC the host
+    // left in it never spins.
+
+    /** When the application started; null while the bootloader is resident. */
+    private appStartedAt: number | null = Number.NEGATIVE_INFINITY;
+    /** Throttle on the signal line, 0-1000; null when the FC drives nothing. */
+    private signal: number | null = 0;
+    /** When the signal last became zero; null while it is not zero. */
+    private zeroSince: number | null = Number.NEGATIVE_INFINITY;
+    private armedFlag = true;
+
+    /** True while the bootloader, not the application, is running. */
+    get inBootloader (): boolean {
+        return this.appStartedAt === null;
+    }
+
+    /**
+     * The bootloader takes over: a connect from the FC, or the application's
+     * signal-loss watchdog firing 2 s after passthrough starves the line
+     * (AM32 `Src/faults.c:83-108`). The simulator folds that watchdog into the
+     * moment passthrough starts, which the host's 2.5 s settle covers anyway.
+     */
+    enterBootloader (): void {
+        this.appStartedAt = null;
+        this.armedFlag = false;
+    }
+
+    /** The FC drives the signal line: throttle 0-1000, or null for no signal. */
+    drive (throttle: number | null, now: number): void {
+        this.settleArming(now);
+        if (throttle === null) {
+            this.armedFlag = false;
+            this.zeroSince = null;
+        } else if (throttle === 0) {
+            if (this.signal !== 0) {
+                this.zeroSince = now;
+            }
+        } else {
+            this.zeroSince = null;
+        }
+        this.signal = throttle;
+    }
+
+    /** True once the application has armed on zero throttle. */
+    isArmed (now: number): boolean {
+        this.settleArming(now);
+        return this.armedFlag;
+    }
+
+    /** Throttle the motor is turning at, 0-1000. Zero unless armed and driven. */
+    spinThrottle (now: number): number {
+        return this.isArmed(now) ? (this.signal ?? 0) : 0;
+    }
+
+    private startApplication (now: number): void {
+        this.appStartedAt = now;
+        this.armedFlag = false;
+        if (this.signal === 0) {
+            this.zeroSince = now;
+        }
+    }
+
+    private settleArming (now: number): void {
+        if (this.armedFlag || this.appStartedAt === null || this.zeroSince === null || this.signal !== 0) {
+            return;
+        }
+        const armsAt = Math.max(this.zeroSince, this.appStartedAt + ESC_STARTUP_TUNE_MS) + ESC_ARM_MS;
+        if (now >= armsAt) {
+            this.armedFlag = true;
+        }
     }
 
     /**

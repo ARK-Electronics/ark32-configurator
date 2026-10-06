@@ -64,18 +64,36 @@ export interface FcProfile {
      */
     readonly mspErrorFrames: boolean
 
+    // ---- motor output ------------------------------------------------------
+
     /**
-     * `MSP_MOTOR` value for an enabled motor: 0 when ArduPilot has `mixed_type`
-     * outputs (AP:535), 1000 when Betaflight idles disarmed (`dshot.c:117` maps
-     * a stopped DShot motor to `PWM_RANGE_MIN`).
-     *
-     * Both are the *not in passthrough* value, which is the only one that can be
-     * observed: `esc4wayInit` calls `motorDisable()`, so a real Betaflight board
-     * reads all zeros once in 4-way -- and 1500 in 3D mode. The simulator never
-     * exercises either, because Betaflight does not answer MSP in passthrough at
-     * all. Whatever the number, it is not a motor count.
+     * The DShot driver sends zero throttle whenever the vehicle is disarmed,
+     * whatever `MSP_SET_MOTOR` wrote (`AP_HAL_ChibiOS/RCOutput.cpp`,
+     * `if (!armed) value = 0`). Betaflight outputs `motor_disarmed[]` while
+     * disarmed (mixer.c:486-490).
      */
-    readonly idleMotorValue: number
+    readonly dshotZeroWhileDisarmed: boolean
+
+    /**
+     * Milliseconds without a valid MSP or 4-way frame after which a motor off
+     * idle is put back to 1000 (`MOTOR_ACTIVE_TIMEOUT`, AP:57 and
+     * `update()` at AP:1349-1387). Zero for none: Betaflight keeps the last
+     * value until the next frame or a reboot.
+     */
+    readonly motorActiveTimeoutMs: number
+
+    /**
+     * All MSP and 4-way input is ignored while armed: `protocol_handler`
+     * returns false and the bytes go to MAVLink (AP:1287-1295).
+     */
+    readonly ignoresMspWhileArmed: boolean
+
+    /**
+     * `MSP_SET_MOTOR` shorter than one value per motor is an error
+     * (msp.c:3308-3310). ArduPilot writes `min(values, num_motors)` and leaves
+     * the rest as they were.
+     */
+    readonly setMotorNeedsEveryMotor: boolean
 
     // ---- 4-way behaviour ---------------------------------------------------
 
@@ -162,7 +180,10 @@ export const ARDUPILOT_PROFILE: FcProfile = {
     blockingFourWay: false,
     acceptsMspV2: false,
     mspErrorFrames: false,
-    idleMotorValue: 0,
+    dshotZeroWhileDisarmed: true,
+    motorActiveTimeoutMs: 1000,
+    ignoresMspWhileArmed: true,
+    setMotorNeedsEveryMotor: false,
     protocolVersion: 107,
     interfaceName: [0x04, 0x41, 0x52, 0x44, 0x55],
     interfaceVersion: [200, 5],
@@ -189,7 +210,10 @@ export const BETAFLIGHT_PROFILE: FcProfile = {
     blockingFourWay: true,
     acceptsMspV2: true,
     mspErrorFrames: true,
-    idleMotorValue: 1000,
+    dshotZeroWhileDisarmed: false,
+    motorActiveTimeoutMs: 0,
+    ignoresMspWhileArmed: false,
+    setMotorNeedsEveryMotor: true,
     protocolVersion: 108,
     interfaceName: [0x6D, 0x34, 0x77, 0x46, 0x43, 0x49, 0x6E, 0x74, 0x66],
     interfaceVersion: [200, 6],

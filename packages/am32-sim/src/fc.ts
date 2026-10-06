@@ -21,7 +21,7 @@
  * policy is measured rather than assumed.
  */
 
-import type { Clock } from 'am32-core/clock';
+import type { Clock, ClockTimer } from 'am32-core/clock';
 import {
     FOUR_WAY_ACK,
     FOUR_WAY_COMMANDS,
@@ -66,6 +66,12 @@ const AP_PASSTHROUGH_FAILURE_COMMAND = 0x0F;
 
 /** Betaflight's `cmd_DeviceReset` busy-wait when the request sets ADDR_L=1 (BF:604-611). */
 const BF_ESC_REBOOT_HOLD_MS = 300;
+
+/** A stopped motor in MSP units, on both firmwares. */
+const MOTOR_STOP = 1000;
+const MOTOR_FULL = 2000;
+/** `MSP_MOTOR` always answers eight slots (AP:528-541, BFm:1278-1291). */
+const MSP_MOTOR_SLOTS = 8;
 
 /**
  * Inbound buffer cap. A 4-way request tops out at 263 bytes and an MSP v1
@@ -114,7 +120,17 @@ export class SimFc implements SimEndpoint {
     readonly battery: SimFcBattery;
 
     /** MSP requests answered, 4-way frames handled, bytes dropped by the gate. */
-    readonly counts = { msp: 0, fourWay: 0, gatedBytes: 0, badCrc: 0 };
+    readonly counts = { msp: 0, fourWay: 0, gatedBytes: 0, badCrc: 0, setMotor: 0 };
+
+    /**
+     * ArduPilot `mixed_type`: the 3D mask covers some motors but not all.
+     * `MSP_SET_MOTOR` is then acked and ignored, and `MSP_MOTOR` reads zeros
+     * (AP:528-568, :1510).
+     */
+    mixedType = false;
+
+    /** Betaflight's `ARMING_DISABLED_MSP`, set and cleared by `MSP_SET_ARMING_DISABLED`. */
+    armingDisabledByMsp = false;
 
     private readonly clock: Clock;
     private readonly listeners = new Set<(chunk: Uint8Array) => void>();
@@ -128,6 +144,16 @@ export class SimFc implements SimEndpoint {
     private readonly mspErrors = new Set<number>();
     /** The clock time the next scheduled reply is queued for -- keeps TX ordered. */
     private txReadyAt: number;
+
+    /**
+     * Each motor output in MSP units: ArduPilot's `hal.rcout` period, or
+     * Betaflight's `motor_disarmed[]`. 1000 is stopped; ArduPilot also has 0,
+     * which sends no DShot frames at all.
+     */
+    private readonly motors: number[];
+    private armedValue = false;
+    private lastValidFrameAt = Number.NEGATIVE_INFINITY;
+    private motorTimeout: ClockTimer | null = null;
 
     // ---- fault knobs -------------------------------------------------------
 
@@ -158,6 +184,7 @@ export class SimFc implements SimEndpoint {
         this.idleMs = this.profile.mavlinkIdleMs;
         this.gateOpensAt = this.clock.now() + this.idleMs;
         this.txReadyAt = this.clock.now();
+        this.motors = new Array<number>(Math.max(MSP_MOTOR_SLOTS, this.escs.length)).fill(MOTOR_STOP);
     }
 
     // ---- knobs -------------------------------------------------------------
@@ -236,6 +263,49 @@ export class SimFc implements SimEndpoint {
         return this.escs[this.selected];
     }
 
+    /**
+     * The vehicle is armed. ArduPilot then ignores every MSP and 4-way byte;
+     * Betaflight disarms on `MSP_SET_ARMING_DISABLED`.
+     */
+    get armed (): boolean {
+        return this.armedValue;
+    }
+
+    set armed (armed: boolean) {
+        this.armedValue = armed;
+        this.driveEscs();
+    }
+
+    /** Motor output `index` in MSP units, as `MSP_MOTOR` would report it unmasked. */
+    motorValue (index: number): number {
+        return this.motors[index] ?? 0;
+    }
+
+    /**
+     * Throttle 0-1000 on ESC `index`'s signal line, or null when nothing is
+     * sent: passthrough, a channel that is not a motor, or ArduPilot's 0.
+     */
+    signalThrottle (index: number): number | null {
+        if (index >= this.motorCountValue || this.mode === 'fourway') {
+            return null;
+        }
+        const value = this.motors[index] ?? MOTOR_STOP;
+        if (value === 0) {
+            return null;
+        }
+        if (this.armedValue ? !this.profile.dshotZeroWhileDisarmed : this.profile.dshotZeroWhileDisarmed) {
+            // Disarmed ArduPilot sends zero; an armed Betaflight is driven by
+            // its mixer, which nothing here models beyond idle.
+            return 0;
+        }
+        return Math.max(0, Math.min(MOTOR_FULL, value) - MOTOR_STOP);
+    }
+
+    /** Throttle 0-1000 the motor on ESC `index` is actually turning at. */
+    escSpin (index: number): number {
+        return this.escs[index]?.spinThrottle(this.clock.now()) ?? 0;
+    }
+
     // ---- SimEndpoint -------------------------------------------------------
 
     onTx (cb: (chunk: Uint8Array) => void): () => void {
@@ -251,10 +321,11 @@ export class SimFc implements SimEndpoint {
         for (const esc of this.escs) {
             esc.disconnect();
         }
+        this.driveEscs();
     }
 
     receive (chunk: Uint8Array): void {
-        if (!this.mspAvailable) {
+        if (!this.mspAvailable || (this.armedValue && this.profile.ignoresMspWhileArmed)) {
             // GCS_Common reads the byte and hands it only to the MAVLink parser
             // while the gate is shut. Nothing buffers it, and it cannot parse as
             // MAVLink, so it does not push the handoff back.
@@ -311,6 +382,7 @@ export class SimFc implements SimEndpoint {
             for (const esc of this.escs) {
                 esc.disconnect();
             }
+            this.driveEscs();
             return true;
         }
         if (head !== FOUR_WAY_LOCAL_ESCAPE) {
@@ -355,6 +427,7 @@ export class SimFc implements SimEndpoint {
         // Betaflight profile ArduPilot's multiplexing and nothing else changes.
         if (head === FOUR_WAY_LOCAL_ESCAPE && !this.blockingFourWay) {
             this.mode = 'fourway';
+            this.driveEscs();
             return true;
         }
         if (head !== DOLLAR) {
@@ -402,9 +475,20 @@ export class SimFc implements SimEndpoint {
      */
     private handleMsp (frame: MspFrame): void {
         this.counts.msp += 1;
+        this.validFrame();
 
         if (this.mspErrors.has(frame.command)) {
             this.replyMspFailure(frame);
+            return;
+        }
+
+        if (frame.command === MSP_COMMANDS.MSP_SET_MOTOR) {
+            this.counts.setMotor += 1;
+            if (this.setMotors(frame.payload)) {
+                this.replyMsp(frame, new Uint8Array(0), 'response');
+            } else {
+                this.replyMsp(frame, new Uint8Array(0), 'error');
+            }
             return;
         }
 
@@ -424,7 +508,73 @@ export class SimFc implements SimEndpoint {
             // Betaflight installs `esc4wayProcess` unconditionally -- even when
             // it just told the host there are zero ESCs (BFm:330-332).
             this.mode = 'fourway';
+            // Both stop DShot here (AP:572-600, BF:139-159), and 2 s later each
+            // ESC's signal-loss watchdog drops it into its bootloader.
+            for (const esc of this.escs) {
+                esc.enterBootloader();
+            }
+            this.driveEscs();
         }
+    }
+
+    /**
+     * `MSP_SET_MOTOR`. False means Betaflight's error reply for a payload
+     * short of one value per motor.
+     */
+    private setMotors (payload: Uint8Array): boolean {
+        const values = Math.floor(payload.length / 2);
+        const read = (i: number) => (payload[i * 2] as number) | ((payload[i * 2 + 1] as number) << 8);
+
+        if (this.profile.setMotorNeedsEveryMotor) {
+            if (values < this.motorCountValue) {
+                return false;
+            }
+            for (let i = 0; i < this.motorCountValue; i += 1) {
+                this.motors[i] = Math.max(MOTOR_STOP, Math.min(MOTOR_FULL, read(i)));
+            }
+        } else if (!this.mixedType) {
+            for (let i = 0; i < Math.min(values, this.motorCountValue); i += 1) {
+                const value = read(i);
+                this.motors[i] = value < MOTOR_STOP ? 0 : value;
+            }
+        }
+        this.armMotorTimeout();
+        this.driveEscs();
+        return true;
+    }
+
+    /** A valid MSP or 4-way frame: ArduPilot's `last_valid_ms` (AP:1257-1276). */
+    private validFrame (): void {
+        this.lastValidFrameAt = this.clock.now();
+        this.armMotorTimeout();
+    }
+
+    /** ArduPilot's motor timeout, rescheduled from the latest valid frame. */
+    private armMotorTimeout (): void {
+        const timeout = this.profile.motorActiveTimeoutMs;
+        if (timeout === 0 || !this.motorControlActive()) {
+            return;
+        }
+        this.motorTimeout?.cancel();
+        const dueAt = this.lastValidFrameAt + timeout + 1;
+        this.motorTimeout = this.clock.setTimeout(() => {
+            this.motorTimeout = null;
+            if (this.motorControlActive() && this.clock.now() - this.lastValidFrameAt > timeout) {
+                this.motors.fill(MOTOR_STOP, 0, this.motorCountValue);
+                this.driveEscs();
+            }
+        }, Math.max(0, dueAt - this.clock.now()));
+    }
+
+    /** `motor_control_active` (AP:1351-1357): any motor off 1000. */
+    private motorControlActive (): boolean {
+        return this.motors.slice(0, this.motorCountValue).some(value => value !== MOTOR_STOP);
+    }
+
+    /** Put each motor output on its ESC's signal line. */
+    private driveEscs (): void {
+        const now = this.clock.now();
+        this.escs.forEach((esc, index) => esc.drive(this.signalThrottle(index), now));
     }
 
     private passthroughRequested (frame: MspFrame): boolean {
@@ -460,16 +610,31 @@ export class SimFc implements SimEndpoint {
         case MSP_COMMANDS.MSP_SET_PASSTHROUGH:
             return Uint8Array.from([this.passthroughRequested(frame) ? this.motorCountValue : 0]);
 
+        case MSP_COMMANDS.MSP_SET_ARMING_DISABLED:
+            if (this.profile.name === 'ardupilot') {
+                return null;
+            }
+            // BFm:4077-4107. Disabling arming also disarms.
+            this.armingDisabledByMsp = (frame.payload[0] ?? 0) !== 0;
+            if (this.armingDisabledByMsp && this.armedValue) {
+                this.armed = false;
+            }
+            return new Uint8Array(0);
+
         default:
             return null;
         }
     }
 
-    /** `MSP_MOTOR`: eight little-endian u16 slots, always, on both firmwares. */
+    /**
+     * `MSP_MOTOR`: eight little-endian u16 slots, always, on both firmwares.
+     * The motors' own values -- not what reaches the ESC, which on a disarmed
+     * ArduPilot is zero whatever this says.
+     */
     private motorValues (): Uint8Array {
-        const payload = new Uint8Array(16);
-        for (let i = 0; i < 8; i += 1) {
-            const value = i < this.motorCountValue ? this.profile.idleMotorValue : 0;
+        const payload = new Uint8Array(MSP_MOTOR_SLOTS * 2);
+        for (let i = 0; i < MSP_MOTOR_SLOTS; i += 1) {
+            const value = i < this.motorCountValue && !this.mixedType ? (this.motors[i] ?? 0) : 0;
             payload[i * 2] = value & 0xFF;
             payload[i * 2 + 1] = (value >> 8) & 0xFF;
         }
@@ -534,6 +699,7 @@ export class SimFc implements SimEndpoint {
 
     private handleFourWay (request: FourWayRequest): void {
         this.counts.fourWay += 1;
+        this.validFrame();
 
         // `cmd_DeviceInitFlash` and `cmd_DeviceReset` carry their own channel;
         // every other command acts on whichever one those last selected.
@@ -596,6 +762,7 @@ export class SimFc implements SimEndpoint {
             // an implicit reset here is what hid the host forgetting to.
             send([0], FOUR_WAY_ACK.ACK_OK);
             this.mode = 'msp';
+            this.driveEscs();
             return;
 
         case FOUR_WAY_COMMANDS.cmd_InterfaceSetMode:
@@ -741,7 +908,7 @@ export class SimFc implements SimEndpoint {
 
         this.selected = channel;
         const esc = this.escs[channel] as SimEsc;
-        const result = esc.reset();
+        const result = esc.reset(this.clock.now());
         spend(result.durationMs);
 
         // Betaflight honours ADDR_L == 1 by holding the ESC's signal pin low for

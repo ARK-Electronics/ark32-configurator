@@ -5,7 +5,8 @@
  *
  * Betaflight has no timeout on `MSP_SET_MOTOR`: `motor_disarmed[]` keeps the
  * last value until another frame or a reboot (msp.c:3308-3315,
- * mixer_init.c:505-510). So the stream is how the host notices a dead link.
+ * mixer_init.c:505-510). So the stream is how the host notices a dead link,
+ * and leaving the test is not done until a stop frame has been acknowledged.
  * A failed frame zeroes and relocks every motor, and the stream carries on
  * sending stops: a motor the FC is still driving stops only when one lands.
  *
@@ -24,7 +25,11 @@ import type { MspSession } from './msp-session';
 /** Full throttle. Zero is stopped. */
 export const MOTOR_THROTTLE_MAX = 1000;
 
-/** `MSP_SET_MOTOR` value of a stopped motor; full throttle is this plus 1000. */
+/**
+ * `MSP_SET_MOTOR` value of a stopped motor; full throttle is this plus 1000.
+ * Only with Betaflight's 3D feature off: with it on, 1000 is full reverse
+ * (dshot.c:89-96), which the session refuses.
+ */
 const MSP_MOTOR_STOP = 1000;
 
 /**
@@ -72,7 +77,9 @@ export class MotorTest {
     private current: Promise<void> | null = null;
     /** Something changed during an exchange; send again when it ends. */
     private resend = false;
-    /** Bumped by every halt or failure, so a wait that outlived its run can tell. */
+    /** A frame just failed; send the stop now rather than after the back-off. */
+    private stopOwed = false;
+    /** Bumped by every halt or start, so a wait that outlived its run can tell. */
     private generation = 0;
     private wake: (() => void) | null = null;
 
@@ -98,6 +105,11 @@ export class MotorTest {
 
     get phase (): MotorTestPhase {
         return this.phaseValue;
+    }
+
+    /** Still running, or halted with its last frames not yet sent. */
+    get active (): boolean {
+        return this.phaseValue !== 'off' || this.sending;
     }
 
     get channels (): number {
@@ -198,44 +210,94 @@ export class MotorTest {
     }
 
     /**
-     * Stop the motors, wait for that frame, and go quiet so the session can
-     * use 4-way. The phase reads `reversing` for `target` until {@link resume}.
+     * Stop the motors and refuse throttle for a reverse of `target`, which
+     * runs once the session's queue reaches it. Stop frames keep going until
+     * {@link suspend}.
      */
-    async suspend (target: number): Promise<void> {
-        this.stop();
-        await this.flush();
-        this.stopSending();
+    prepareReverse (target: number): void {
+        if (this.phaseValue !== 'ready' && this.phaseValue !== 'starting') {
+            throw new SessionError('motor-test', 'the motor test is not running');
+        }
+        if (!Number.isInteger(target) || target < 0 || target >= this.throttle.length) {
+            throw new SessionError('motor-test', `there is no ESC ${target + 1}; the FC reports ${this.throttle.length}`);
+        }
         this.phaseValue = 'reversing';
         this.target = target;
+        this.stop();
         this.emit();
     }
 
-    /** Back to sending stopped motors after a {@link suspend}, still locked. */
+    /**
+     * Go quiet and confirm the stop landed, so the session can use 4-way.
+     * Throws, back to sending stops, if the FC never acknowledged one:
+     * Betaflight brings its outputs back after passthrough with whatever value
+     * they last had.
+     */
+    async suspend (): Promise<void> {
+        this.stop();
+        await this.flush();
+        this.stopSending();
+
+        try {
+            await this.confirmStop();
+        } catch (error) {
+            this.phaseValue = 'ready';
+            this.target = undefined;
+            this.startSending();
+            this.emit();
+            throw error;
+        }
+    }
+
+    /** Back to sending stopped motors after a {@link suspend}, locked. */
     resume (): void {
+        this.throttle.fill(0);
+        this.unlocked = false;
         this.phaseValue = 'starting';
         this.target = undefined;
         this.startSending();
         this.emit();
     }
 
-    /** End the current run now: motors to zero, any wait cut short. */
+    /**
+     * End the current run now: motors to zero, any wait cut short, throttle
+     * refused. The frames still go out until {@link end}.
+     */
     halt (): void {
         this.generation += 1;
         this.wake?.();
+        const wasOff = this.phaseValue === 'off';
+        this.phaseValue = 'off';
+        this.target = undefined;
         this.stop();
+        if (!wasOff) {
+            this.emit();
+        }
     }
 
-    /** Send a last stop frame if still sending, then go quiet. Never throws. */
-    async end (): Promise<void> {
-        if (this.phaseValue === 'off') {
+    /**
+     * Halt, finish the exchange in flight, stop sending, then send one stop
+     * and wait for the FC to acknowledge it. Throws if it never does, because
+     * the motors may still be turning. `sendStop: false` is for the session
+     * when it is in passthrough, where MSP must not be sent.
+     */
+    async end (options: { sendStop?: boolean } = {}): Promise<void> {
+        if (!this.active) {
             return;
         }
         this.halt();
         await this.flush();
         this.stopSending();
-        this.phaseValue = 'off';
-        this.target = undefined;
-        this.emit();
+        if (options.sendStop === false) {
+            return;
+        }
+        try {
+            await this.confirmStop();
+        } catch (error) {
+            this.error = describeError(error);
+            this.emit();
+            throw error;
+        }
     }
 
     // ---- keepalive ---------------------------------------------------------
@@ -264,12 +326,18 @@ export class MotorTest {
         this.timer = null;
         this.current = this.exchange().finally(() => {
             this.current = null;
-            if (this.sending) {
-                this.timer = this.clock.setTimeout(() => {
-                    this.timer = null;
-                    this.kick();
-                }, this.responding ? this.keepaliveMs : UNANSWERED_RETRY_MS);
+            if (!this.sending) {
+                return;
             }
+            let delay = this.responding ? this.keepaliveMs : UNANSWERED_RETRY_MS;
+            if (this.stopOwed || this.resend) {
+                delay = 0;
+            }
+            this.stopOwed = false;
+            this.timer = this.clock.setTimeout(() => {
+                this.timer = null;
+                this.kick();
+            }, delay);
         });
     }
 
@@ -299,15 +367,28 @@ export class MotorTest {
         }
     }
 
+    /** One all-stop frame, outside the keepalive, that must be acknowledged. */
+    private async confirmStop (): Promise<void> {
+        try {
+            await this.msp.request(MSP_COMMANDS.MSP_SET_MOTOR, this.payload());
+        } catch (error) {
+            const message = `the flight controller did not acknowledge the stop, so the motors may still be turning: ${describeError(error)}`;
+            this.log('error', message);
+            throw new SessionError('motor-test', message, { cause: error });
+        }
+    }
+
     /**
-     * Zero and relock on the first failure. The keepalive keeps sending those
-     * zeros, so a motor the FC is still driving stops once a frame lands.
+     * Zero and relock on the first failure, and owe a stop frame straight
+     * away. The keepalive keeps sending zeros, so a motor the FC is still
+     * driving stops once one lands.
      */
     private failed (error: unknown): void {
         if (!this.responding) {
             return;
         }
         this.responding = false;
+        this.stopOwed = true;
         this.error = `MSP_SET_MOTOR failed, so every motor was stopped and locked: ${describeError(error)}`;
         this.log('error', this.error);
         this.throttle.fill(0);

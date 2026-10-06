@@ -10,6 +10,7 @@ import type { VirtualClock } from 'am32-core/clock';
 import { EepromLayout } from 'am32-core/eeprom/layout';
 import { MSP_COMMANDS } from 'am32-core/framing/msp';
 import { Am32Session, SessionError, type MotorTestStatus } from 'am32-core/session';
+import { FEATURE_3D } from '../fc';
 import { createSimHarness, type SimHarness, type SimHarnessOptions } from '../harness';
 
 async function drive<T> (clock: VirtualClock, work: Promise<T>): Promise<T> {
@@ -108,6 +109,40 @@ describe('motor test: start', () => {
     });
 });
 
+describe('motor test: refusals', () => {
+    it('refuses Betaflight with 3D on, where its stop value would spin every motor', async () => {
+        const h = rig();
+        h.fc.features = FEATURE_3D;
+        await drive(h.clock, h.session.connect());
+
+        const failure = await drive(h.clock, h.session.startMotorTest()).catch((error: unknown) => error);
+
+        expect((failure as SessionError).reason).toBe('motor-test');
+        expect((failure as Error).message).toMatch(/3D/);
+        expect(h.fc.counts.setMotor).toBe(0);
+        expect(spins(h)).toEqual([0, 0, 0, 0]);
+    });
+
+    it('refuses to start when the FC will not disable arming', async () => {
+        const h = rig();
+        h.fc.mspError(MSP_COMMANDS.MSP_SET_ARMING_DISABLED);
+        await drive(h.clock, h.session.connect());
+
+        const failure = await drive(h.clock, h.session.startMotorTest()).catch((error: unknown) => error);
+
+        expect((failure as SessionError).reason).toBe('motor-test');
+        expect(h.fc.counts.setMotor).toBe(0);
+        expect(h.session.state).toBe('connected');
+    });
+
+    it('refuses to reconnect while running', async () => {
+        const h = await running();
+        const failure = await drive(h.clock, h.session.connect()).catch((error: unknown) => error);
+        expect((failure as SessionError).reason).toBe('motor-test');
+        expect(h.session.state).toBe('motor-test');
+    });
+});
+
 describe('motor test: keepalive', () => {
     it('resends the throttle while it runs', async () => {
         const h = await running();
@@ -139,7 +174,8 @@ describe('motor test: keepalive', () => {
         expect(spins(h)).toEqual([300, 300, 300, 300]);
 
         h.transport.faults.clear();
-        await h.clock.advance(1500);
+        // Stops go out once a second while the FC is silent.
+        await h.clock.advance(3000);
 
         expect(spins(h)).toEqual([0, 0, 0, 0]);
         expect(h.session.motors.responding).toBe(true);
@@ -199,6 +235,51 @@ describe('motor test: stopping', () => {
         expect(h.fc.counts.setMotor).toBe(sent);
     });
 
+    it('ending confirms the stop even when the frame in flight loses its reply', async () => {
+        const h = await running();
+        h.session.unlockMotors();
+        h.session.setAllMotorThrottle(300);
+        await h.clock.advance(150);
+
+        // Every reply from here on is lost; the frames still reach the FC.
+        h.transport.faults.dropBytes(1_000_000, { direction: 'rx' });
+        const failure = await drive(h.clock, h.session.endMotorTest()).catch((error: unknown) => error);
+
+        expect(spins(h)).toEqual([0, 0, 0, 0]);
+        // Nothing acknowledged the stop, so the caller is told.
+        expect((failure as SessionError).reason).toBe('motor-test');
+        expect(h.session.motors.phase).toBe('off');
+        expect(h.session.state).toBe('connected');
+    });
+
+    it('refuses throttle the moment an end is requested', async () => {
+        const h = await running();
+        h.session.unlockMotors();
+        h.session.setAllMotorThrottle(300);
+        await h.clock.advance(150);
+
+        const end = h.session.endMotorTest();
+        expectMotorTestError(() => h.session.unlockMotors());
+        expectMotorTestError(() => h.session.setAllMotorThrottle(300));
+        await drive(h.clock, end);
+
+        expect(spins(h)).toEqual([0, 0, 0, 0]);
+        expect(h.fc.motorValue(0)).toBe(1000);
+    });
+
+    it('an end requested before the start runs cancels it', async () => {
+        const h = await afterSettings();
+
+        const start = h.session.startMotorTest();
+        const end = h.session.endMotorTest();
+        await drive(h.clock, start);
+        await drive(h.clock, end);
+
+        expect(h.statuses.map(s => s.phase)).not.toContain('starting');
+        expect(h.fc.counts.setMotor).toBe(0);
+        expect(h.session.state).toBe('connected');
+    });
+
     it('ending during the arming wait cuts it short and never becomes ready', async () => {
         const h = await afterSettings();
         const start = h.session.startMotorTest();
@@ -237,6 +318,7 @@ describe('motor test: stopping', () => {
         expect(h.session.motors.phase).toBe('off');
         expect(h.session.state).toBe('passthrough');
         expect(h.fc.motorValue(0)).toBe(1000);
+        expect(h.fc.counts.mspInFourWay).toBe(0);
     });
 });
 
@@ -259,6 +341,52 @@ describe('motor test: reverse direction', () => {
         expect(h.session.state).toBe('motor-test');
         expect(h.escs.every(esc => !esc.inBootloader && esc.isArmed(h.clock.now()))).toBe(true);
         expect(spins(h)).toEqual([0, 0, 0, 0]);
+        expect(h.fc.counts.mspInFourWay).toBe(0);
+    });
+
+    it('refuses throttle while it runs, and comes back locked', async () => {
+        const h = await running();
+        h.session.unlockMotors();
+
+        const reverse = h.session.reverseMotorDirection(0);
+        expectMotorTestError(() => h.session.unlockMotors());
+        expectMotorTestError(() => h.session.setMotorThrottle(0, 300));
+        await drive(h.clock, reverse);
+
+        expect(h.session.motors).toMatchObject({ phase: 'ready', unlocked: false, throttle: [0, 0, 0, 0] });
+    });
+
+    it('is cancelled by an end requested before it starts', async () => {
+        const h = await running();
+        const offset = h.escs[0]!.eepromOffset + EepromLayout.MOTOR_DIRECTION.offset;
+        const before = h.escs[1]!.peek(offset, 1)[0];
+
+        const reverse = h.session.reverseMotorDirection(1);
+        const end = h.session.endMotorTest();
+        const failure = await drive(h.clock, reverse).catch((error: unknown) => error);
+        await drive(h.clock, end);
+
+        expect((failure as SessionError).reason).toBe('motor-test');
+        expect(h.escs[1]!.peek(offset, 1)[0]).toBe(before);
+        expect(h.session.motors.phase).toBe('off');
+        expect(h.session.state).toBe('connected');
+    });
+
+    it('does not enter passthrough until the FC has acknowledged a stop', async () => {
+        const h = await running();
+        h.session.unlockMotors();
+        h.session.setAllMotorThrottle(300);
+        await h.clock.advance(150);
+        const fourWayFrames = h.fc.counts.fourWay;
+
+        // Betaflight would bring the last value back after passthrough.
+        h.transport.faults.dropBytes(1_000_000, { direction: 'rx' });
+        const failure = await drive(h.clock, h.session.reverseMotorDirection(1)).catch((error: unknown) => error);
+
+        expect((failure as SessionError).reason).toBe('motor-test');
+        expect(h.fc.counts.fourWay).toBe(fourWayFrames);
+        expect(h.session.motors).toMatchObject({ phase: 'ready', unlocked: false });
+        expect(h.session.state).toBe('motor-test');
     });
 
     it('still comes back to the motor test when the write fails', async () => {

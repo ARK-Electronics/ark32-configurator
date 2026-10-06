@@ -269,6 +269,9 @@ export interface Am32SessionOptions {
 
 const DEFAULT_PASSTHROUGH_SETTLE_MS = 2500;
 const DEFAULT_ESC_ARM_MS = 3000;
+
+/** Betaflight `FEATURE_3D` (config/feature.h:59). */
+const BETAFLIGHT_FEATURE_3D = 1 << 12;
 const DEFAULT_INTER_ESC_DELAY_MS = 300;
 const DEFAULT_BAUD_RATE = 115200;
 
@@ -393,7 +396,7 @@ function motorTestRefusal (fc: FcInfo): string {
             'ignores MSP while armed, so MSP_SET_MOTOR never reaches a motor. Use the ground station\'s ' +
             'motor test instead.';
     }
-    return `this motor test needs Betaflight or INAV; the flight controller identified as ${fc.variantId || 'unknown'}`;
+    return `the motor test is only verified on Betaflight; the flight controller identified as ${fc.variantId || 'unknown'}`;
 }
 
 export class Am32Session {
@@ -415,6 +418,8 @@ export class Am32Session {
 
     /** When passthrough last ended and the ESCs were sent back to their firmware. */
     private escsResetAt = Number.NEGATIVE_INFINITY;
+    /** The motor test disabled arming on the FC and has not re-enabled it. */
+    private armingDisabled = false;
 
     private stateValue: SessionState = 'idle';
     private fcInfo: FcInfo | null = null;
@@ -543,6 +548,9 @@ export class Am32Session {
             throw new SessionError('transport', 'session already disconnected; build a new one');
         }
         this.requireMspAvailable('connect');
+        if (this.motorTest.active) {
+            throw new SessionError('motor-test', 'connect: end the motor test first');
+        }
 
         this.setState('connecting');
         this.emitter.emit('progress', { phase: 'connect', current: 0, total: 1 });
@@ -1443,16 +1451,18 @@ export class Am32Session {
      * throttle the moment it disarmed.
      */
     startMotorTest (): Promise<void> {
-        return this.exclusive(() => this.startMotorTestImpl());
+        // Taken now, so an end requested while this waits its turn cancels it.
+        const run = this.motorTest.run;
+        return this.exclusive(() => this.startMotorTestImpl(run));
     }
 
-    private async startMotorTestImpl (): Promise<void> {
+    private async startMotorTestImpl (run: number): Promise<void> {
         this.requireConnected();
         const fc = this.fcInfo as FcInfo;
-        if (this.motorTest.phase !== 'off') {
+        if (this.motorTest.active) {
             return;
         }
-        if (!fc.quirks.mspMotorTest) {
+        if (!fc.quirks.mspMotorTestVariantIds.includes(fc.variantId)) {
             throw new SessionError('motor-test', motorTestRefusal(fc));
         }
         if (fc.motorCount === 0) {
@@ -1462,12 +1472,40 @@ export class Am32Session {
         if (this.inPassthrough) {
             await this.exitPassthroughImpl();
         }
-        await this.msp.tryRequest(MSP_COMMANDS.MSP_SET_ARMING_DISABLED, Uint8Array.of(1), 1);
+        await this.requireMotorStopIsMinimum();
+        if (this.motorTest.run !== run) {
+            return;
+        }
+
+        await this.msp.request(MSP_COMMANDS.MSP_SET_ARMING_DISABLED, Uint8Array.of(1)).catch((error: unknown) => {
+            throw new SessionError('motor-test', `the flight controller would not disable arming: ${describeError(error)}`, { cause: error });
+        });
+        this.armingDisabled = true;
 
         this.setState('motor-test');
-        const run = this.motorTest.begin(fc.motorCount);
+        const begun = this.motorTest.begin(fc.motorCount);
         this.emitter.emit('log', { level: 'info', message: `motor test started on ${fc.motorCount} motor(s)` });
-        await this.awaitEscsArmed(run);
+        await this.awaitEscsArmed(begun);
+    }
+
+    /**
+     * Refuse Betaflight's 3D feature. With it on, `MSP_SET_MOTOR` 1000 is full
+     * reverse and 1500 is stop (dshot.c:89-96), so the stop this test sends
+     * would spin every motor.
+     */
+    private async requireMotorStopIsMinimum (): Promise<void> {
+        const frame = await this.msp.request(MSP_COMMANDS.MSP_FEATURE_CONFIG).catch((error: unknown) => {
+            throw new SessionError('motor-test', `could not read the flight controller's features: ${describeError(error)}`, { cause: error });
+        });
+        const features = ((frame.payload[0] ?? 0) | ((frame.payload[1] ?? 0) << 8) |
+            ((frame.payload[2] ?? 0) << 16) | ((frame.payload[3] ?? 0) << 24)) >>> 0;
+        if (features & BETAFLIGHT_FEATURE_3D) {
+            throw new SessionError(
+                'motor-test',
+                'the flight controller has 3D mode on, where the lowest motor value is full reverse; ' +
+                'turn the 3D feature off to use the motor test'
+            );
+        }
     }
 
     /**
@@ -1505,8 +1543,10 @@ export class Am32Session {
     }
 
     /**
-     * Stop the motors, send that, stop sending, and re-enable arming. The
-     * motors stop before this waits on anything already queued.
+     * Stop the motors, confirm the FC took the stop, stop sending, and
+     * re-enable arming. Throttle is refused and the motors are stopped before
+     * this waits on anything already queued. Throws if the stop was never
+     * acknowledged.
      */
     endMotorTest (): Promise<void> {
         this.motorTest.halt();
@@ -1514,17 +1554,26 @@ export class Am32Session {
     }
 
     private async endMotorTestImpl (): Promise<void> {
-        if (this.motorTest.phase === 'off') {
-            return;
+        let failure: unknown;
+        const ending = this.motorTest.active;
+        if (ending) {
+            await this.motorTest.end({ sendStop: !this.inPassthrough }).catch((error: unknown) => {
+                failure = error;
+            });
         }
-        await this.motorTest.end();
-        if (!this.inPassthrough) {
+        if (this.armingDisabled && !this.inPassthrough) {
             await this.msp.tryRequest(MSP_COMMANDS.MSP_SET_ARMING_DISABLED, Uint8Array.of(0), 1);
+            this.armingDisabled = false;
         }
         if (this.stateValue === 'motor-test') {
             this.setState('connected');
         }
-        this.emitter.emit('log', { level: 'info', message: 'motor test ended' });
+        if (ending) {
+            this.emitter.emit('log', { level: 'info', message: 'motor test ended' });
+        }
+        if (failure !== undefined) {
+            throw failure;
+        }
     }
 
     /**
@@ -1533,21 +1582,23 @@ export class Am32Session {
      * ready and locked.
      */
     reverseMotorDirection (target: number): Promise<WriteSettingsResult> {
-        this.motorTest.stop();
-        return this.exclusive(() => this.reverseMotorDirectionImpl(target));
+        // Taken now, so an end queued behind this call cancels it rather than
+        // waiting out a whole passthrough round trip.
+        const run = this.motorTest.run;
+        try {
+            this.motorTest.prepareReverse(target);
+        } catch (error) {
+            return Promise.reject(error);
+        }
+        return this.exclusive(() => this.reverseMotorDirectionImpl(target, run));
     }
 
-    private async reverseMotorDirectionImpl (target: number): Promise<WriteSettingsResult> {
-        const phase = this.motorTest.phase;
-        if (phase !== 'ready' && phase !== 'starting') {
-            throw new SessionError('motor-test', `the motor test is ${phase}; start it first`);
-        }
-        if (!Number.isInteger(target) || target < 0 || target >= this.motorTest.channels) {
-            throw new SessionError('motor-test', `there is no ESC ${target + 1}; the FC reports ${this.motorTest.channels}`);
+    private async reverseMotorDirectionImpl (target: number, run: number): Promise<WriteSettingsResult> {
+        if (!this.motorTest.isCurrent(run)) {
+            throw new SessionError('motor-test', 'the motor test ended before the reverse could start');
         }
 
-        const run = this.motorTest.run;
-        await this.motorTest.suspend(target);
+        await this.motorTest.suspend();
         this.setState('connected');
 
         let result: WriteSettingsResult | undefined;
@@ -1579,7 +1630,10 @@ export class Am32Session {
             });
         }
 
-        if (this.motorTest.isCurrent(run) && !this.inPassthrough) {
+        if (this.inPassthrough) {
+            // Stuck in 4-way: no MSP, so no motor test until a start leaves it.
+            await this.motorTest.end({ sendStop: false });
+        } else if (this.motorTest.isCurrent(run)) {
             this.setState('motor-test');
             this.motorTest.resume();
             await this.awaitEscsArmed(run);
@@ -1607,7 +1661,7 @@ export class Am32Session {
             return;
         }
 
-        await this.endMotorTestImpl();
+        await this.endMotorTestImpl().catch(() => undefined);
 
         if (this.inPassthrough) {
             await this.exitPassthroughImpl().catch((error: unknown) => {

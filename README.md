@@ -26,6 +26,7 @@ The fork was rebuilt around a single protocol core in July 2026 — issue #3 has
 - **Correct FC handling.** Connect probes instead of unconditionally sitting out ArduPilot's 4 s MAVLink window, an unresponsive ESC degrades an enumerate instead of crashing it, and flash timeouts match the FC's real budgets.
 - **ARK32 firmware catalog.** Release listings come from `ARK-Electronics/ARK32` GitHub Releases (MinIO-backed hosting optional).
 - **Settings cheat sheet.** Every EEPROM field is documented under **Settings guide** in the web UI (also a slide-over from the configurator). Same text lives in [ARK32 `doc/eeprom-settings.md`](https://github.com/ARK-Electronics/ARK32/blob/main/doc/eeprom-settings.md).
+- **Motor test.** Spin each ESC through the flight controller and reverse its direction, with the sliders locked until you confirm the props are off. Betaflight only, with 3D mode off: ArduPilot sends DShot zero while disarmed, so `MSP_SET_MOTOR` cannot reach a motor.
 - **Removed:** bootloader flashing and USB-direct mode.
 
 ## The `ark32` CLI

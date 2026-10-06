@@ -108,9 +108,11 @@ export interface FcQuirks {
     readonly readSetAddressFailureAcksOk: boolean;
 
     /**
-     * `MSP_SET_MOTOR` spins a motor while the FC is disarmed.
+     * `MSP_FC_VARIANT` ids whose `MSP_SET_MOTOR` the motor test is verified
+     * against: it spins a motor while disarmed, 1000 stops it outside 3D mode,
+     * and it holds the value with no timeout (msp.c:3308-3315, dshot.c:83-102).
      *
-     * False for ArduPilot. AP_BLHeli refuses all MSP while soft-armed
+     * None for ArduPilot. AP_BLHeli refuses all MSP while soft-armed
      * (AP:1287-1295), and the ChibiOS DShot driver sends zero throttle whenever
      * the vehicle is not soft-armed (`AP_HAL_ChibiOS/RCOutput.cpp`
      * `if (!armed) value = 0`), so the command can never reach a motor. It also
@@ -118,7 +120,7 @@ export interface FcQuirks {
      * frame saves 0xFFFF and the timeout "restores" it, leaving every servo
      * output disabled until a reboot.
      */
-    readonly mspMotorTest: boolean;
+    readonly mspMotorTestVariantIds: readonly string[];
 
     /** `MSP_FC_VARIANT` strings that select this record. */
     readonly fcVariantIds: readonly string[];
@@ -132,7 +134,7 @@ export const ARDUPILOT_QUIRKS: FcQuirks = {
     entersFourWayOnBareEscape: true,
     mspErrorFrames: false,
     readSetAddressFailureAcksOk: true,
-    mspMotorTest: false,
+    mspMotorTestVariantIds: [],
     fcVariantIds: ['ARDU']
 };
 
@@ -149,7 +151,7 @@ export const BETAFLIGHT_QUIRKS: FcQuirks = {
     entersFourWayOnBareEscape: false,
     mspErrorFrames: true,
     readSetAddressFailureAcksOk: false,
-    mspMotorTest: true,
+    mspMotorTestVariantIds: ['BTFL'],
     fcVariantIds: ['BTFL', 'INAV', 'CLFL', 'EMUF']
 };
 
@@ -166,7 +168,7 @@ export const GENERIC_QUIRKS: FcQuirks = {
     entersFourWayOnBareEscape: false,
     mspErrorFrames: false,
     readSetAddressFailureAcksOk: true,
-    mspMotorTest: false,
+    mspMotorTestVariantIds: [],
     fcVariantIds: []
 };
 

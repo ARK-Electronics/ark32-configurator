@@ -125,6 +125,7 @@ import type { SettingChange } from '~/utils/schema-settings';
 
 const serialStore = useSerialStore();
 const escStore = useEscStore();
+const escSession = useEscSession();
 const syncAllEscTunes = ref(false);
 const guideOpen = ref(false);
 const cohorts = computed(() => escSchemaCohorts(escStore.selectedEscInfo));
@@ -154,5 +155,11 @@ const onSettingsChange = ({ field, value, individual }: SettingChange, targets =
         }
     }
 };
+// The motor test leaves passthrough; the settings view needs it back.
+onMounted(() => {
+    if (serialStore.hasConnection && !serialStore.isFourWay && escStore.count > 0) {
+        escSession.resumePassthrough();
+    }
+});
 const onTuneChange = (change: SettingChange) => onSettingsChange({ ...change, individual: syncAllEscTunes.value ? undefined : change.individual });
 </script>

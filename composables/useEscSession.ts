@@ -81,6 +81,7 @@ const PER_TARGET_PHASES: ProgressEvent['phase'][] = ['flash', 'reset', 'read'];
 export const useEscSession = () => {
     const serialStore = useSerialStore();
     const escStore = useEscStore();
+    const motorStore = useMotorStore();
     const logStore = useLogStore();
     const toast = useToast();
 
@@ -128,7 +129,7 @@ export const useEscSession = () => {
         // disagreeing with the wire before: `isFourWay` was set true *before*
         // MSP_SET_PASSTHROUGH was known to have worked.
         live.off.push(session.on('state', (event) => {
-            serialStore.hasConnection = ['connected', 'passthrough', 'enumerating'].includes(event.state);
+            serialStore.hasConnection = ['connected', 'passthrough', 'enumerating', 'motor-test'].includes(event.state);
             serialStore.isFourWay = event.state === 'passthrough' || event.state === 'enumerating';
         }));
 
@@ -139,6 +140,10 @@ export const useEscSession = () => {
             if (event.info) {
                 entry.data = event.info;
             }
+        }));
+
+        live.off.push(session.on('motors', (status) => {
+            motorStore.status = status;
         }));
 
         live.off.push(session.on('progress', (event) => {
@@ -275,6 +280,7 @@ export const useEscSession = () => {
 
         serialStore.$reset();
         escStore.$reset();
+        motorStore.$reset();
 
         if (session && !options.quiet) {
             logStore.log('Connection to device closed');
@@ -512,9 +518,109 @@ export const useEscSession = () => {
         }
     };
 
+    /**
+     * Back into 4-way after the motor test, so the settings view has its ESCs.
+     * Only when there are ESCs on screen to show; otherwise Read does it.
+     */
+    const resumePassthrough = (): Promise<void> =>
+        exclusive('entering passthrough', async () => {
+            try {
+                const session = requireSession();
+                if (escStore.count > 0 && !session.inPassthrough) {
+                    await ensurePassthrough(session);
+                }
+            } catch (error) {
+                surface('Could not re-enter passthrough', error);
+            } finally {
+                escStore.step = '';
+            }
+        }, () => undefined);
+
+    /**
+     * Leave passthrough and wait for the ESCs to arm. Resolves with the reason
+     * the session refused, or null.
+     */
+    const startMotorTest = (): Promise<string | null> =>
+        exclusive('the motor test', async () => {
+            try {
+                await requireSession().startMotorTest();
+                return null;
+            } catch (error) {
+                logStore.logError(message(error));
+                return message(error);
+            }
+        }, () => 'another operation is still running');
+
+    /**
+     * Stop the motors and leave motor-test mode. Not behind `exclusive()`, like
+     * `disconnect`: it is how the page lets go, whatever else is running.
+     */
+    const endMotorTest = async (): Promise<void> => {
+        await live.session?.endMotorTest().catch((error: unknown) => {
+            logStore.logError(`Ending the motor test: ${message(error)}`);
+        });
+    };
+
+    /** Every motor to zero and relock. Synchronous, and never refused. */
+    const stopMotors = (): void => {
+        live.session?.stopMotors();
+    };
+
+    /** A session refusal here means the UI raced a stop; log it, do not toast. */
+    const motorCall = (call: (session: Am32Session) => void): boolean => {
+        try {
+            call(requireSession());
+            return true;
+        } catch (error) {
+            logStore.logWarning(message(error));
+            return false;
+        }
+    };
+
+    const unlockMotors = (): boolean => motorCall(session => session.unlockMotors());
+    const setMotorThrottle = (target: number, throttle: number): boolean =>
+        motorCall(session => session.setMotorThrottle(target, throttle));
+    const setAllMotorThrottle = (throttle: number): boolean =>
+        motorCall(session => session.setAllMotorThrottle(throttle));
+
+    /**
+     * Flip one ESC's direction and come back to the motor test, locked. The
+     * ESC's card on the settings page follows, without losing unsaved edits.
+     */
+    const reverseMotorDirection = (target: number): Promise<boolean> =>
+        exclusive(`reversing ESC ${target + 1}`, async () => {
+            try {
+                const result = await requireSession().reverseMotorDirection(target);
+                const entry = escStore.escData[target];
+                if (entry?.data) {
+                    entry.data.settingsBuffer = result.image;
+                    if (entry.data.settingsDirty) {
+                        entry.data.settings.MOTOR_DIRECTION = result.settings.MOTOR_DIRECTION;
+                    } else {
+                        entry.data.settings = result.settings;
+                    }
+                }
+                toast.add({ title: `ESC ${target + 1} reversed`, color: 'green' });
+                return true;
+            } catch (error) {
+                surface(`Could not reverse ESC ${target + 1}`, error);
+                return false;
+            } finally {
+                escStore.step = '';
+            }
+        }, () => false);
+
     return {
         connect,
         disconnect,
+        resumePassthrough,
+        startMotorTest,
+        endMotorTest,
+        stopMotors,
+        unlockMotors,
+        setMotorThrottle,
+        setAllMotorThrottle,
+        reverseMotorDirection,
         readAll,
         saveDirtySettings,
         applySettings,

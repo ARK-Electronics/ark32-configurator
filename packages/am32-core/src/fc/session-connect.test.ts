@@ -435,3 +435,77 @@ describe('Am32Session guards', () => {
         expect(info.variantId).toBe('BTFL');
     });
 });
+
+describe('Am32Session.connect on a port that closes under it', () => {
+    /** A scripted transport that counts opens; `failReopen` makes every open after the first reject. */
+    function closingRig (options: { failReopen?: boolean } = {}) {
+        const clock = new VirtualClock(0);
+        const transport = new ScriptedTransport(clock);
+        const opened = { count: 0 };
+        transport.open = () => {
+            opened.count += 1;
+            if (options.failReopen && opened.count > 1) {
+                return Promise.reject(new Error('Failed to open serial port.'));
+            }
+            transport.isOpen = true;
+            return Promise.resolve();
+        };
+        return { clock, transport, opened };
+    }
+
+    it('reopens a port that closed under the first probe, and connects', async () => {
+        const h = closingRig();
+        let dropped = false;
+        h.transport.respond = (request) => {
+            if (!dropped) {
+                // What a fatal read error does: the transport closes itself.
+                dropped = true;
+                h.transport.isOpen = false;
+                return null;
+            }
+            return mspReplies(BETAFLIGHT_REPLIES)(request);
+        };
+        const session = new Am32Session({ transport: h.transport, clock: h.clock });
+        const logs: string[] = [];
+        session.on('log', event => logs.push(event.message));
+
+        const info = await drive(h.clock, session.connect());
+
+        expect(info.variantId).toBe('BTFL');
+        expect(h.opened.count).toBe(2);
+        expect(logs).toContain('the port closed during connect; reopening it');
+    });
+
+    it('gives up when the port closes again after the reopen, without sitting out the idle window', async () => {
+        const h = closingRig();
+        h.transport.respond = () => {
+            h.transport.isOpen = false;
+            return null;
+        };
+        const session = new Am32Session({ transport: h.transport, clock: h.clock, idleWindowMs: 8000 });
+
+        await expect(drive(h.clock, session.connect())).rejects.toMatchObject({
+            name: 'SessionError',
+            reason: 'transport',
+            message: 'the port closed again after it was reopened'
+        });
+        expect(h.opened.count).toBe(2);
+        // Polling a closed port used to run out the whole window first.
+        expect(h.clock.now()).toBeLessThan(8000);
+        expect(session.state).toBe('idle');
+    });
+
+    it('reports a port that cannot be reopened as a transport error', async () => {
+        const h = closingRig({ failReopen: true });
+        h.transport.respond = () => {
+            h.transport.isOpen = false;
+            return null;
+        };
+        const session = new Am32Session({ transport: h.transport, clock: h.clock });
+
+        await expect(drive(h.clock, session.connect())).rejects.toMatchObject({
+            reason: 'transport',
+            message: 'the port closed and could not be reopened: Failed to open serial port.'
+        });
+    });
+});

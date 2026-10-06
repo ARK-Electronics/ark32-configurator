@@ -361,6 +361,7 @@
 <script setup lang="ts">
 import { findFirmwareAsset } from 'am32-core/releases';
 import db from '~/src/db';
+import { NO_DEVICE } from '~/stores/serial';
 
 /**
  * UI and store mirroring only.
@@ -500,10 +501,13 @@ const baudrateOptions = ref([
 const baudrate = ref('115200');
 
 const requestSerialDevices = async () => {
-    await navigator.serial.requestPort({
+    const port = await navigator.serial.requestPort({
         filters: usbFCVendorIds.map(id => ({ usbVendorId: id }))
     });
     await fetchPairedDevices();
+    // The chooser is the only place the user can tell ports that share a
+    // VID:PID apart, so take exactly the one picked there.
+    serialStore.selectPort(port);
 };
 
 const fetchPairedDevices = async () => {
@@ -511,8 +515,8 @@ const fetchPairedDevices = async () => {
     serialStore.addSerialDevices(pairedDevices);
 
     if (pairedDevices.length > 0) {
-        if (serialStore.selectedDevice.id === '-1') {
-            serialStore.selectLastDevice();
+        if (serialStore.selectedDevice.id === NO_DEVICE.id) {
+            serialStore.selectDefaultDevice();
         }
     } else {
         // The browser has forgotten the port. Tear the session down rather than
@@ -520,10 +524,7 @@ const fetchPairedDevices = async () => {
         if (serialStore.hasConnection) {
             await escSession.disconnect();
         }
-        serialStore.selectedDevice = {
-            id: '-1',
-            label: 'Select device'
-        };
+        serialStore.selectedDevice = { ...NO_DEVICE };
     }
 };
 
@@ -533,12 +534,6 @@ useIntervalFn(() => {
     fetchPairedDevices();
 }, 500);
 
-const findSelectedPort = async (): Promise<SerialPort | null> => {
-    const [vendorId, productId] = serialStore.selectedDevice.id.split(':');
-    const ports = await navigator.serial.getPorts();
-    return ports.find(p => p.getInfo().usbVendorId === +vendorId && p.getInfo().usbProductId === +productId) ?? null;
-};
-
 const connectToDevice = async () => {
     const router = useRouter();
     if (!router.currentRoute.value.fullPath.startsWith('/configurator')) {
@@ -547,7 +542,7 @@ const connectToDevice = async () => {
         });
     }
 
-    const port = await findSelectedPort();
+    const port = serialStore.selectedPort();
     if (!port) {
         logError('Serial port not found');
         return;

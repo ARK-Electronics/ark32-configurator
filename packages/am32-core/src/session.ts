@@ -255,6 +255,13 @@ const DEFAULT_INTER_ESC_DELAY_MS = 300;
 const DEFAULT_BAUD_RATE = 115200;
 
 /**
+ * Reopens one connect may spend on a transport that closed under it. One covers
+ * a transient failure; a port that fails again straight after reopening has a
+ * persistent fault, and retrying only repeats it.
+ */
+const CONNECT_REOPENS = 1;
+
+/**
  * The AM32 firmware name lives in the 32 bytes below the EEPROM page
  * (`ADDRESS_MAGIC_FILE_NAME`, AM32-bootloader `main.c:556-559`). ARK images
  * also embed the ship version as a second C-string after the first NUL; see
@@ -380,6 +387,7 @@ export class Am32Session {
     private stateValue: SessionState = 'idle';
     private fcInfo: FcInfo | null = null;
     private escCountValue = 0;
+    private reopensLeft = 0;
 
     /**
      * Mutex: the tail of the chain of session operations.
@@ -426,7 +434,8 @@ export class Am32Session {
             log,
             retries: options.mspRetries,
             idleWindowMs: options.idleWindowMs,
-            pollIntervalMs: options.pollIntervalMs
+            pollIntervalMs: options.pollIntervalMs,
+            ensureOpen: () => this.reopenIfClosed()
         });
 
         this.fourWay = new FourWaySession({
@@ -504,6 +513,7 @@ export class Am32Session {
         }
 
         let info: FcInfo;
+        this.reopensLeft = CONNECT_REOPENS;
         try {
             info = await this.msp.connect();
         } catch (error) {
@@ -1404,6 +1414,30 @@ export class Am32Session {
     }
 
     // ---- internals ---------------------------------------------------------
+
+    /**
+     * Reopen a transport that closed during connect, within the connect's
+     * budget. A transport closes itself on a fatal read error, and polling a
+     * closed one for the rest of the idle window only delays the failure.
+     */
+    private async reopenIfClosed (): Promise<void> {
+        if (this.transport.isOpen) {
+            return;
+        }
+        if (this.reopensLeft <= 0) {
+            throw new SessionError('transport', 'the port closed again after it was reopened');
+        }
+        this.reopensLeft -= 1;
+        this.emitter.emit('log', { level: 'warn', message: 'the port closed during connect; reopening it' });
+
+        try {
+            await this.transport.open({ baudRate: this.baudRate });
+        } catch (error) {
+            throw new SessionError('transport', `the port closed and could not be reopened: ${describeError(error)}`, {
+                cause: error
+            });
+        }
+    }
 
     /**
      * Run `work` after every operation queued before it, in call order.

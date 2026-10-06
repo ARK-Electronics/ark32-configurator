@@ -96,6 +96,12 @@ export interface MspSessionOptions {
     idleWindowMs?: number;
     /** Gap between polls inside the idle window. */
     pollIntervalMs?: number;
+    /**
+     * Runs before every frame {@link MspSession.connect} sends, to reopen a
+     * transport that closed under it. Throwing ends the connect. Without it, a
+     * port that dies mid-connect is polled, closed, for the whole idle window.
+     */
+    ensureOpen?: () => Promise<void>;
 }
 
 const DEFAULT_RETRIES = 2;
@@ -116,6 +122,7 @@ export class MspSession {
     private readonly retries: number;
     private readonly idleWindowMs: number;
     private readonly pollIntervalMs: number;
+    private readonly ensureOpen: () => Promise<void>;
 
     /** Adopted from the detected FC by {@link connect}; starts `generic`. */
     policy: TimeoutPolicy;
@@ -128,6 +135,7 @@ export class MspSession {
         this.retries = Math.max(1, options.retries ?? DEFAULT_RETRIES);
         this.idleWindowMs = Math.max(0, options.idleWindowMs ?? DEFAULT_IDLE_WINDOW_MS);
         this.pollIntervalMs = Math.max(0, options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS);
+        this.ensureOpen = options.ensureOpen ?? (() => Promise.resolve());
     }
 
     /**
@@ -189,13 +197,14 @@ export class MspSession {
     async connect (): Promise<FcInfo> {
         const startedAt = this.clock.now();
 
-        let api = await this.tryRequest(MSP_COMMANDS.MSP_API_VERSION, undefined, 1);
+        let api = await this.probe();
         let waited = false;
 
         if (!api) {
             this.log('info', 'no MSP reply; escaping 4-way passthrough in case a previous session left us there');
+            await this.ensureOpen();
             await this.escapeFourWay();
-            api = await this.tryRequest(MSP_COMMANDS.MSP_API_VERSION, undefined, 1);
+            api = await this.probe();
         }
 
         if (!api) {
@@ -305,6 +314,12 @@ export class MspSession {
         await this.link.drain();
     }
 
+    /** One single-attempt `MSP_API_VERSION`, on a transport reopened if it closed. */
+    private async probe (): Promise<MspFrame | null> {
+        await this.ensureOpen();
+        return this.tryRequest(MSP_COMMANDS.MSP_API_VERSION, undefined, 1);
+    }
+
     /**
      * Poll `MSP_API_VERSION` until it answers or the window budget is spent.
      *
@@ -319,7 +334,7 @@ export class MspSession {
 
         while (this.clock.now() < deadline) {
             await this.clock.sleep(this.pollIntervalMs);
-            const frame = await this.tryRequest(MSP_COMMANDS.MSP_API_VERSION, undefined, 1);
+            const frame = await this.probe();
             if (frame) {
                 this.log('info', `MSP answered after ${this.clock.now() - startedAt}ms`);
                 return frame;

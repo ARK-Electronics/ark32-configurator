@@ -196,6 +196,15 @@ useEventListener(document, 'visibilitychange', () => {
     }
 });
 useEventListener(window, 'pagehide', stop);
+// The stop may not reach the FC before the tab dies, and Betaflight holds the
+// last value it got, so ask before closing on a spinning motor.
+useEventListener(window, 'beforeunload', (event: BeforeUnloadEvent) => {
+    const spinning = status.value.unlocked && status.value.throttle.some(value => value > 0);
+    stop();
+    if (spinning) {
+        event.preventDefault();
+    }
+});
 useEventListener(window, 'keydown', (event: KeyboardEvent) => {
     if (event.key === 'Escape') {
         stop();

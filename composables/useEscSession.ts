@@ -557,7 +557,7 @@ export const useEscSession = () => {
      */
     const endMotorTest = async (): Promise<void> => {
         await live.session?.endMotorTest().catch((error: unknown) => {
-            logStore.logError(`Ending the motor test: ${message(error)}`);
+            surface('The motors may still be turning', error);
         });
     };
 

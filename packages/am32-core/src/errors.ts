@@ -46,7 +46,12 @@ export type SessionErrorReason =
      */
     | 'image'
     /** The call needs a `connect()` that has not happened. */
-    | 'not-connected';
+    | 'not-connected'
+    /**
+     * The motor test refused a call (locked, not ready, or an FC that cannot
+     * run one), or stopped because `MSP_SET_MOTOR` failed.
+     */
+    | 'motor-test';
 
 export class SessionError extends Error {
     readonly reason: SessionErrorReason;

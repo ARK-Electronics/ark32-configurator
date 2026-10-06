@@ -47,14 +47,14 @@
             </UChip>
           </div>
           <div class="flex gap-2">
-            <UButton icon="i-material-symbols-find-in-page-outline" size="2xs" :loading="escStore.isLoading" :disabled="escStore.isBusy" @click="connectToEsc">
+            <UButton icon="i-material-symbols-find-in-page-outline" size="2xs" :loading="escStore.isLoading" :disabled="escStore.isBusy || motorStore.active" @click="connectToEsc">
               Read
             </UButton>
             <UButton
               icon="i-material-symbols-save"
               color="blue"
               size="2xs"
-              :disabled="!isAnySettingsDirty || escStore.isSaving || escStore.isBusy"
+              :disabled="!isAnySettingsDirty || escStore.isSaving || escStore.isBusy || motorStore.active"
               :loading="escStore.isSaving"
               @click="writeConfig"
             >
@@ -63,7 +63,7 @@
           </div>
         </div>
       </div>
-      <div v-if="serialStore.hasConnection && escStore.count > 0" class="flex gap-4 w-full">
+      <div v-if="serialStore.hasConnection && escStore.count > 0 && !motorStore.active" class="flex gap-4 w-full">
         <div class="w-full flex flex-col space-y-2">
           <UButton label="Flash firmware" size="2xs" icon="i-material-symbols-full-stacked-bar-chart" color="teal" @click="flashModalOpen = true" />
           <UButton
@@ -376,6 +376,7 @@ import { NO_DEVICE } from '~/stores/serial';
 const toast = useToast();
 const serialStore = useSerialStore();
 const escStore = useEscStore();
+const motorStore = useMotorStore();
 const { logError } = useLogStore();
 const escSession = useEscSession();
 
@@ -536,7 +537,8 @@ useIntervalFn(() => {
 
 const connectToDevice = async () => {
     const router = useRouter();
-    if (!router.currentRoute.value.fullPath.startsWith('/configurator')) {
+    const path = router.currentRoute.value.fullPath;
+    if (!path.startsWith('/configurator') && !path.startsWith('/motors')) {
         router.push({
             path: '/configurator'
         });

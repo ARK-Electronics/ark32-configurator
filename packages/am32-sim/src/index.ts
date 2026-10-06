@@ -26,7 +26,7 @@ export {
 } from './esc';
 export type { EscAck, EscResult, SimEscOptions } from './esc';
 
-export { SimFc } from './fc';
+export { FEATURE_3D, SimFc } from './fc';
 export type { SimFcBattery, SimFcOptions } from './fc';
 
 export {

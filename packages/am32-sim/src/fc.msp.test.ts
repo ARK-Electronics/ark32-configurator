@@ -118,6 +118,7 @@ describe('SimFc: MSP payloads', () => {
         // 1000 and pads to eight slots either way. Neither is a motor count.
         const ardu = rig({ profile: 'ardupilot', escCount: 4 });
         ardu.fc.mavlinkIdleGate = 0;
+        ardu.fc.mixedType = true;
         await ardu.open();
         const arduMotors = await msp(ardu, MSP_COMMANDS.MSP_MOTOR);
         expect(Array.from((arduMotors as { payload: Uint8Array }).payload)).toEqual(new Array(16).fill(0));

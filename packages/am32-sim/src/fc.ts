@@ -70,8 +70,13 @@ const BF_ESC_REBOOT_HOLD_MS = 300;
 /** A stopped motor in MSP units, on both firmwares. */
 const MOTOR_STOP = 1000;
 const MOTOR_FULL = 2000;
+const MOTOR_THROTTLE_SPAN = MOTOR_FULL - MOTOR_STOP;
 /** `MSP_MOTOR` always answers eight slots (AP:528-541, BFm:1278-1291). */
 const MSP_MOTOR_SLOTS = 8;
+/** `FEATURE_3D` in `MSP_FEATURE_CONFIG` on both (config/feature.h:59, AP:443-449). */
+export const FEATURE_3D = 1 << 12;
+/** With 3D on, Betaflight stops a DShot motor at exactly 1500 (dshot.c:89-96). */
+const MOTOR_3D_NEUTRAL = 1500;
 
 /**
  * Inbound buffer cap. A 4-way request tops out at 263 bytes and an MSP v1
@@ -120,7 +125,25 @@ export class SimFc implements SimEndpoint {
     readonly battery: SimFcBattery;
 
     /** MSP requests answered, 4-way frames handled, bytes dropped by the gate. */
-    readonly counts = { msp: 0, fourWay: 0, gatedBytes: 0, badCrc: 0, setMotor: 0 };
+    readonly counts = { msp: 0, fourWay: 0, gatedBytes: 0, badCrc: 0, setMotor: 0, mspInFourWay: 0 };
+
+    /**
+     * `MSP_FEATURE_CONFIG` bits. With {@link FEATURE_3D} set, Betaflight
+     * drives 1000 as full reverse and 1500 as stop; ArduPilot reports the bit
+     * when it has reversible channels.
+     */
+    get features (): number {
+        return this.featuresValue;
+    }
+
+    /** Applied as a reboot with that config would: idle motors move to the new stop value. */
+    set features (features: number) {
+        this.featuresValue = features;
+        this.motors.fill(features & FEATURE_3D ? MOTOR_3D_NEUTRAL : MOTOR_STOP);
+        this.driveEscs();
+    }
+
+    private featuresValue = 0;
 
     /**
      * ArduPilot `mixed_type`: the 3D mask covers some motors but not all.
@@ -298,6 +321,10 @@ export class SimFc implements SimEndpoint {
             // its mixer, which nothing here models beyond idle.
             return 0;
         }
+        if (this.featuresValue & FEATURE_3D) {
+            // Either side of neutral spins, one way or the other.
+            return Math.min(MOTOR_THROTTLE_SPAN, Math.abs(value - MOTOR_3D_NEUTRAL) * 2);
+        }
         return Math.max(0, Math.min(MOTOR_FULL, value) - MOTOR_STOP);
     }
 
@@ -368,6 +395,10 @@ export class SimFc implements SimEndpoint {
      */
     private pumpFourWay (): boolean {
         const head = this.rx[0] as number;
+        if (head === DOLLAR) {
+            // The host must never send this; see Am32Session.requireMspAvailable.
+            this.counts.mspInFourWay += 1;
+        }
 
         if (head === DOLLAR && !this.blockingFourWay) {
             // ArduPilot does not *multiplex* MSP and 4-way, as the plan's quirks
@@ -603,6 +634,14 @@ export class SimFc implements SimEndpoint {
 
         case MSP_COMMANDS.MSP_MOTOR_CONFIG:
             return this.motorConfig();
+
+        case MSP_COMMANDS.MSP_FEATURE_CONFIG:
+            return Uint8Array.of(
+                this.featuresValue & 0xFF,
+                (this.featuresValue >> 8) & 0xFF,
+                (this.featuresValue >> 16) & 0xFF,
+                (this.featuresValue >>> 24) & 0xFF
+            );
 
         case MSP_COMMANDS.MSP_UID:
             return Uint8Array.from([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);

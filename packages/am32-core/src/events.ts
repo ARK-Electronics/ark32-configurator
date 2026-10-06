@@ -27,6 +27,8 @@ export type SessionState =
     | 'passthrough'
     /** Walking the ESC channels. */
     | 'enumerating'
+    /** Driving the motors with `MSP_SET_MOTOR`. See {@link MotorTestStatus}. */
+    | 'motor-test'
     /** The transport is closed. Terminal. */
     | 'disconnected';
 
@@ -62,6 +64,34 @@ export interface EscEvent {
     error?: string
 }
 
+export type MotorTestPhase =
+    /** No motor test. */
+    | 'off'
+    /** Leaving passthrough and waiting for the ESCs to boot and arm. */
+    | 'starting'
+    /** Throttle is accepted once unlocked. */
+    | 'ready'
+    /** Flipping one ESC's direction over 4-way; the motors are stopped. */
+    | 'reversing';
+
+/** The motor test as a client should render it. Emitted on every change. */
+export interface MotorTestStatus {
+    phase: MotorTestPhase
+    /** Throttle is refused until the caller unlocks; any stop relocks. */
+    unlocked: boolean
+    /**
+     * The last `MSP_SET_MOTOR` was answered. A failure stops and relocks every
+     * motor; unlocking waits for the FC to answer again.
+     */
+    responding: boolean
+    /** Per channel, 0 (stopped) to 1000 (full). Channel N is FC motor output N. */
+    throttle: number[]
+    /** The channel being reversed while `phase` is `reversing`. */
+    target?: number
+    /** Why the motors were last stopped by a failure, until the next unlock. */
+    error?: string
+}
+
 export interface StateEvent {
     state: SessionState
     previous: SessionState
@@ -72,6 +102,7 @@ export interface SessionEvents {
     progress: ProgressEvent
     esc: EscEvent
     state: StateEvent
+    motors: MotorTestStatus
 }
 
 export type SessionEventName = keyof SessionEvents;

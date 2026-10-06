@@ -109,6 +109,8 @@ export type {
     EscEvent,
     LogEvent,
     LogLevel,
+    MotorTestPhase,
+    MotorTestStatus,
     ProgressEvent,
     SessionEventName,
     SessionEvents,
@@ -146,6 +148,9 @@ export {
     quirksForVariant
 } from './fc/quirks';
 export type { FcQuirks, MspInPassthrough } from './fc/quirks';
+
+export { MOTOR_KEEPALIVE_MS, MOTOR_THROTTLE_MAX, MotorTest } from './fc/motor-test';
+export type { MotorTestOptions } from './fc/motor-test';
 
 export { MspSession } from './fc/msp-session';
 export type { FcApiVersion, FcBattery, FcInfo, MspSessionOptions } from './fc/msp-session';

@@ -53,12 +53,15 @@ import { SessionError, causedBySessionError, describeError } from './errors';
 import {
     SessionEmitter,
     type LogLevel,
+    type MotorTestStatus,
     type SessionEventName,
     type SessionListener,
     type SessionState
 } from './events';
 import { FourWaySession } from './esc/fourway-session';
+import { MotorTest } from './fc/motor-test';
 import { MspSession, type FcInfo } from './fc/msp-session';
+import { MSP_COMMANDS } from './framing/msp';
 import { fillImage, parseHex, type HexData } from './hex';
 import { Link, type LinkOptions } from './link/link';
 import { DEFAULT_TIMEOUT_POLICY, TimeoutPolicy } from './link/timeout-policy';
@@ -74,9 +77,12 @@ export type { FcApiVersion, FcBattery, FcInfo } from './fc/msp-session';
 export type { FcQuirks, MspInPassthrough } from './fc/quirks';
 export { SessionError } from './errors';
 export type { SessionErrorReason } from './errors';
+export { MOTOR_KEEPALIVE_MS, MOTOR_THROTTLE_MAX } from './fc/motor-test';
 export type {
     EscEvent,
     LogEvent,
+    MotorTestPhase,
+    MotorTestStatus,
     ProgressEvent,
     SessionEventName,
     SessionEvents,
@@ -248,9 +254,21 @@ export interface Am32SessionOptions {
 
     /** Baud rate for `transport.open()` when `connect()` has to open it. */
     baudRate?: number;
+
+    /**
+     * How long after leaving passthrough the motor test waits before it
+     * accepts throttle. Covers an AM32 ESC's boot: the 1.4 s startup tune
+     * (ARK32 `Src/sounds.c:122,183-195`) and then a second of zero throttle
+     * before it arms (`Src/control_loop.c:580-582`).
+     */
+    escArmMs?: number;
+
+    /** Gap between `MSP_SET_MOTOR` frames while a motor test runs. */
+    motorKeepaliveMs?: number;
 }
 
 const DEFAULT_PASSTHROUGH_SETTLE_MS = 2500;
+const DEFAULT_ESC_ARM_MS = 3000;
 const DEFAULT_INTER_ESC_DELAY_MS = 300;
 const DEFAULT_BAUD_RATE = 115200;
 
@@ -369,6 +387,15 @@ function isVerifyMismatch (error: unknown): boolean {
     return causedBySessionError(error)?.reason === 'esc-verify';
 }
 
+function motorTestRefusal (fc: FcInfo): string {
+    if (fc.variant === 'ardupilot') {
+        return 'ArduPilot cannot run this motor test: it sends DShot zero whenever it is disarmed and ' +
+            'ignores MSP while armed, so MSP_SET_MOTOR never reaches a motor. Use the ground station\'s ' +
+            'motor test instead.';
+    }
+    return `this motor test needs Betaflight or INAV; the flight controller identified as ${fc.variantId || 'unknown'}`;
+}
+
 export class Am32Session {
     readonly schema: EepromSchema;
     readonly schemaInfo: LoadedSchema;
@@ -378,11 +405,16 @@ export class Am32Session {
     private readonly link: Link;
     private readonly msp: MspSession;
     private readonly fourWay: FourWaySession;
+    private readonly motorTest: MotorTest;
     private readonly emitter = new SessionEmitter();
 
     private readonly passthroughSettleMs: number;
     private readonly interEscDelayMs: number;
     private readonly baudRate: number;
+    private readonly escArmMs: number;
+
+    /** When passthrough last ended and the ESCs were sent back to their firmware. */
+    private escsResetAt = Number.NEGATIVE_INFINITY;
 
     private stateValue: SessionState = 'idle';
     private fcInfo: FcInfo | null = null;
@@ -417,6 +449,7 @@ export class Am32Session {
         this.passthroughSettleMs = Math.max(0, options.passthroughSettleMs ?? DEFAULT_PASSTHROUGH_SETTLE_MS);
         this.interEscDelayMs = Math.max(0, options.interEscDelayMs ?? DEFAULT_INTER_ESC_DELAY_MS);
         this.baudRate = options.baudRate ?? DEFAULT_BAUD_RATE;
+        this.escArmMs = Math.max(0, options.escArmMs ?? DEFAULT_ESC_ARM_MS);
 
         const log = (level: LogLevel, message: string) => this.emitter.emit('log', { level, message });
         const policy = options.policy ?? DEFAULT_TIMEOUT_POLICY;
@@ -445,6 +478,14 @@ export class Am32Session {
             retries: options.fourWayRetries,
             initRetries: options.initFlashRetries
         });
+
+        this.motorTest = new MotorTest({
+            msp: this.msp,
+            clock: this.clock,
+            log,
+            keepaliveMs: options.motorKeepaliveMs,
+            emit: status => this.emitter.emit('motors', status)
+        });
     }
 
     // ---- state -------------------------------------------------------------
@@ -468,6 +509,11 @@ export class Am32Session {
 
     get inPassthrough (): boolean {
         return this.stateValue === 'passthrough' || this.stateValue === 'enumerating';
+    }
+
+    /** The motor test as it stands. Also emitted as `motors` on every change. */
+    get motors (): MotorTestStatus {
+        return this.motorTest.status;
     }
 
     /** Link counters -- attempts, timeouts, drains, discarded bytes. */
@@ -558,6 +604,11 @@ export class Am32Session {
         if (this.inPassthrough) {
             return this.escCountValue;
         }
+        if (this.stateValue === 'motor-test') {
+            this.emitter.emit('log', { level: 'info', message: 'ending the motor test to enter passthrough' });
+            this.motorTest.halt();
+            await this.endMotorTestImpl();
+        }
 
         this.emitter.emit('progress', { phase: 'passthrough', current: 0, total: 1 });
         const count = await this.msp.enterPassthrough();
@@ -620,6 +671,7 @@ export class Am32Session {
         }
 
         await this.fourWay.exit();
+        this.escsResetAt = this.clock.now();
         // The count belonged to that passthrough session. Keeping it would leave
         // `escCount` reporting channels nobody can address, against what the
         // getter promises.
@@ -1376,6 +1428,169 @@ export class Am32Session {
         this.emitter.emit('progress', { phase: 'reset', current: 1, total: 1, target });
     }
 
+    // ---- motor test --------------------------------------------------------
+
+    /**
+     * Drive the motors from the host: leave passthrough, wait for the ESCs to
+     * boot and arm, then resend every channel's throttle until
+     * {@link endMotorTest}. Resolves once throttle is accepted, locked.
+     *
+     * An ESC only spins while running its firmware, and the settings flow
+     * leaves every ESC in its bootloader; `exitPassthrough` resets them, and
+     * this waits out their boot. Arming is disabled on the FC for the duration,
+     * because Betaflight keeps `motor_disarmed[]` across an arm and disarm
+     * (mixer.c:486-490), so a craft armed mid-test would resume the test's
+     * throttle the moment it disarmed.
+     */
+    startMotorTest (): Promise<void> {
+        return this.exclusive(() => this.startMotorTestImpl());
+    }
+
+    private async startMotorTestImpl (): Promise<void> {
+        this.requireConnected();
+        const fc = this.fcInfo as FcInfo;
+        if (this.motorTest.phase !== 'off') {
+            return;
+        }
+        if (!fc.quirks.mspMotorTest) {
+            throw new SessionError('motor-test', motorTestRefusal(fc));
+        }
+        if (fc.motorCount === 0) {
+            throw new SessionError('motor-test', 'the flight controller reports no motors');
+        }
+
+        if (this.inPassthrough) {
+            await this.exitPassthroughImpl();
+        }
+        await this.msp.tryRequest(MSP_COMMANDS.MSP_SET_ARMING_DISABLED, Uint8Array.of(1), 1);
+
+        this.setState('motor-test');
+        const run = this.motorTest.begin(fc.motorCount);
+        this.emitter.emit('log', { level: 'info', message: `motor test started on ${fc.motorCount} motor(s)` });
+        await this.awaitEscsArmed(run);
+    }
+
+    /**
+     * Sit out what is left of the ESCs' boot, sending stopped motors, then
+     * accept throttle. Returns quietly if the test was ended meanwhile.
+     */
+    private async awaitEscsArmed (run: number): Promise<void> {
+        const remaining = this.escsResetAt + this.escArmMs - this.clock.now();
+        if (remaining > 0) {
+            this.emitter.emit('log', { level: 'info', message: `waiting ${remaining}ms for the ESCs to boot and arm` });
+            await this.motorTest.wait(remaining, run);
+        }
+        if (this.motorTest.isCurrent(run)) {
+            this.motorTest.ready();
+        }
+    }
+
+    /** Accept throttle. Only once the motor test is ready; any stop relocks. */
+    unlockMotors (): void {
+        this.motorTest.unlock();
+    }
+
+    /** Every motor to zero, sent now, and relock. Safe to call at any time. */
+    stopMotors (): void {
+        this.motorTest.stop();
+    }
+
+    /** Zero-based channel `target`, which is FC motor output `target + 1`. */
+    setMotorThrottle (target: number, throttle: number): void {
+        this.motorTest.setThrottle(target, throttle);
+    }
+
+    setAllMotorThrottle (throttle: number): void {
+        this.motorTest.setAllThrottle(throttle);
+    }
+
+    /**
+     * Stop the motors, send that, stop sending, and re-enable arming. The
+     * motors stop before this waits on anything already queued.
+     */
+    endMotorTest (): Promise<void> {
+        this.motorTest.halt();
+        return this.exclusive(() => this.endMotorTestImpl());
+    }
+
+    private async endMotorTestImpl (): Promise<void> {
+        if (this.motorTest.phase === 'off') {
+            return;
+        }
+        await this.motorTest.end();
+        if (!this.inPassthrough) {
+            await this.msp.tryRequest(MSP_COMMANDS.MSP_SET_ARMING_DISABLED, Uint8Array.of(0), 1);
+        }
+        if (this.stateValue === 'motor-test') {
+            this.setState('connected');
+        }
+        this.emitter.emit('log', { level: 'info', message: 'motor test ended' });
+    }
+
+    /**
+     * Flip one ESC's `MOTOR_DIRECTION` without leaving the motor test: stop the
+     * motors, write the setting over 4-way, reset the ESCs, and come back
+     * ready and locked.
+     */
+    reverseMotorDirection (target: number): Promise<WriteSettingsResult> {
+        this.motorTest.stop();
+        return this.exclusive(() => this.reverseMotorDirectionImpl(target));
+    }
+
+    private async reverseMotorDirectionImpl (target: number): Promise<WriteSettingsResult> {
+        const phase = this.motorTest.phase;
+        if (phase !== 'ready' && phase !== 'starting') {
+            throw new SessionError('motor-test', `the motor test is ${phase}; start it first`);
+        }
+        if (!Number.isInteger(target) || target < 0 || target >= this.motorTest.channels) {
+            throw new SessionError('motor-test', `there is no ESC ${target + 1}; the FC reports ${this.motorTest.channels}`);
+        }
+
+        const run = this.motorTest.run;
+        await this.motorTest.suspend(target);
+        this.setState('connected');
+
+        let result: WriteSettingsResult | undefined;
+        let failure: unknown;
+        try {
+            const count = await this.enterPassthroughImpl();
+            if (target >= count) {
+                throw new SessionError('motor-test', `ESC ${target + 1} is not one of the ${count} the FC passes through`);
+            }
+            result = await this.writeSettingsImpl(target, (base, layoutRevision) => {
+                const current = decodeSettings(base, layoutRevision, this.schema, contextFromImage(base)).MOTOR_DIRECTION;
+                if (typeof current !== 'number') {
+                    throw new SessionError('esc-command', 'this ESC has no MOTOR_DIRECTION setting', { target });
+                }
+                // The firmware reverses only on exactly 1 (ARK32 `Src/main.c:320`).
+                return { MOTOR_DIRECTION: current === 1 ? 0 : 1 };
+            }, {});
+            this.emitter.emit('log', {
+                level: 'info',
+                message: `ESC #${target + 1}: direction ${result.settings.MOTOR_DIRECTION === 1 ? 'reversed' : 'normal'}`
+            });
+        } catch (error) {
+            failure = error;
+        }
+
+        if (this.inPassthrough) {
+            await this.exitPassthroughImpl().catch((error: unknown) => {
+                failure ??= error;
+            });
+        }
+
+        if (this.motorTest.isCurrent(run) && !this.inPassthrough) {
+            this.setState('motor-test');
+            this.motorTest.resume();
+            await this.awaitEscsArmed(run);
+        }
+
+        if (failure !== undefined) {
+            throw failure;
+        }
+        return result as WriteSettingsResult;
+    }
+
     /**
      * Leave passthrough if we are in it, stop listening, and close the port.
      *
@@ -1383,6 +1598,7 @@ export class Am32Session {
      * RX subscription is gone with it. Build a new one.
      */
     disconnect (): Promise<void> {
+        this.motorTest.halt();
         return this.exclusive(() => this.disconnectImpl());
     }
 
@@ -1390,6 +1606,8 @@ export class Am32Session {
         if (this.stateValue === 'disconnected') {
             return;
         }
+
+        await this.endMotorTestImpl();
 
         if (this.inPassthrough) {
             await this.exitPassthroughImpl().catch((error: unknown) => {

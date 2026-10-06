@@ -372,6 +372,22 @@ describe('motor test: reverse direction', () => {
         expect(h.session.state).toBe('connected');
     });
 
+    it('requested while the ESCs are still arming, keeps throttle refused when the wait ends', async () => {
+        const h = await afterSettings();
+        const start = h.session.startMotorTest();
+        while (h.session.motors.phase === 'off') {
+            await h.clock.advanceToNextTimer();
+        }
+
+        const reverse = h.session.reverseMotorDirection(1);
+        await drive(h.clock, start);
+
+        expect(h.session.motors.phase).toBe('reversing');
+        expectMotorTestError(() => h.session.unlockMotors());
+        await drive(h.clock, reverse);
+        expect(h.session.motors).toMatchObject({ phase: 'ready', unlocked: false });
+    });
+
     it('does not enter passthrough until the FC has acknowledged a stop', async () => {
         const h = await running();
         h.session.unlockMotors();

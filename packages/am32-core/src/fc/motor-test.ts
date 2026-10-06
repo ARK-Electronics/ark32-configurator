@@ -141,6 +141,10 @@ export class MotorTest {
 
     /** The ESCs have had time to arm: throttle is accepted once unlocked. */
     ready (): void {
+        // A reverse requested during the wait owns the phase now.
+        if (this.phaseValue !== 'starting') {
+            return;
+        }
         this.phaseValue = 'ready';
         this.emit();
     }
@@ -234,6 +238,7 @@ export class MotorTest {
      * they last had.
      */
     async suspend (): Promise<void> {
+        const run = this.generation;
         this.stop();
         await this.flush();
         this.stopSending();
@@ -241,10 +246,14 @@ export class MotorTest {
         try {
             await this.confirmStop();
         } catch (error) {
-            this.phaseValue = 'ready';
-            this.target = undefined;
-            this.startSending();
-            this.emit();
+            // An end that arrived meanwhile owns the test; leave it stopped.
+            if (run === this.generation) {
+                this.phaseValue = 'ready';
+                this.target = undefined;
+                this.responding = false;
+                this.startSending();
+                this.emit();
+            }
             throw error;
         }
     }
@@ -370,7 +379,7 @@ export class MotorTest {
     /** One all-stop frame, outside the keepalive, that must be acknowledged. */
     private async confirmStop (): Promise<void> {
         try {
-            await this.msp.request(MSP_COMMANDS.MSP_SET_MOTOR, this.payload());
+            await this.msp.request(MSP_COMMANDS.MSP_SET_MOTOR, this.payload(true));
         } catch (error) {
             const message = `the flight controller did not acknowledge the stop, so the motors may still be turning: ${describeError(error)}`;
             this.log('error', message);
@@ -396,11 +405,11 @@ export class MotorTest {
         this.emit();
     }
 
-    private payload (): Uint8Array {
+    private payload (allStop = false): Uint8Array {
         const slots = Math.max(MSP_MOTOR_SLOTS, this.throttle.length);
         const bytes = new Uint8Array(slots * 2);
         for (let i = 0; i < slots; i += 1) {
-            const value = MSP_MOTOR_STOP + (this.unlocked ? (this.throttle[i] ?? 0) : 0);
+            const value = MSP_MOTOR_STOP + (this.unlocked && !allStop ? (this.throttle[i] ?? 0) : 0);
             bytes[i * 2] = value & 0xFF;
             bytes[i * 2 + 1] = (value >> 8) & 0xFF;
         }

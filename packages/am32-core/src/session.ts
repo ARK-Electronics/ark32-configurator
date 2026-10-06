@@ -1477,10 +1477,15 @@ export class Am32Session {
             return;
         }
 
+        // Set first: a lost reply can still mean the FC disabled arming.
+        this.armingDisabled = true;
         await this.msp.request(MSP_COMMANDS.MSP_SET_ARMING_DISABLED, Uint8Array.of(1)).catch((error: unknown) => {
             throw new SessionError('motor-test', `the flight controller would not disable arming: ${describeError(error)}`, { cause: error });
         });
-        this.armingDisabled = true;
+        if (this.motorTest.run !== run) {
+            await this.reenableArming();
+            return;
+        }
 
         this.setState('motor-test');
         const begun = this.motorTest.begin(fc.motorCount);
@@ -1561,10 +1566,7 @@ export class Am32Session {
                 failure = error;
             });
         }
-        if (this.armingDisabled && !this.inPassthrough) {
-            await this.msp.tryRequest(MSP_COMMANDS.MSP_SET_ARMING_DISABLED, Uint8Array.of(0), 1);
-            this.armingDisabled = false;
-        }
+        await this.reenableArming();
         if (this.stateValue === 'motor-test') {
             this.setState('connected');
         }
@@ -1573,6 +1575,13 @@ export class Am32Session {
         }
         if (failure !== undefined) {
             throw failure;
+        }
+    }
+
+    private async reenableArming (): Promise<void> {
+        if (this.armingDisabled && !this.inPassthrough) {
+            await this.msp.tryRequest(MSP_COMMANDS.MSP_SET_ARMING_DISABLED, Uint8Array.of(0), 1);
+            this.armingDisabled = false;
         }
     }
 
@@ -1599,6 +1608,9 @@ export class Am32Session {
         }
 
         await this.motorTest.suspend();
+        if (!this.motorTest.isCurrent(run)) {
+            throw new SessionError('motor-test', 'the motor test ended before the reverse could start');
+        }
         this.setState('connected');
 
         let result: WriteSettingsResult | undefined;
@@ -1670,6 +1682,7 @@ export class Am32Session {
                     message: `could not leave passthrough cleanly: ${describeError(error)}`
                 });
             });
+            await this.reenableArming();
         }
 
         this.link.dispose();

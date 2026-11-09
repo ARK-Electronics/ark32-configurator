@@ -126,7 +126,7 @@ export function migrateScaledRamp (raw: number, cells: number): RampMigrationRep
  * True when flashing an image of `imageLayout` over `page` needs the ramp
  * migrated: the page is an ARK layout-3 page, and the image runs layout 4 or
  * later. `imageLayout` is null for an image that does not declare its layout
- * (every release before ARK32 PR #128), which never migrates.
+ * (every image built before ARK32 PR #134), which never migrates.
  */
 export function needsRampMigration (page: Uint8Array, imageLayout: number | null): boolean {
     return imageLayout !== null && imageLayout >= EXACT_RAMP_LAYOUT &&

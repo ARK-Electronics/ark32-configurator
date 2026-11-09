@@ -67,7 +67,7 @@ never rewrites the byte, and its first boot stamps layout 4 over the page, so
 
 - **When.** The page is layout 3 with `MAIN_REVISION` 3 or 32 (ARK firmware),
   and the hex declares layout 4 or later. ARK32 images carry the layout as a
-  third string in the `.file_name` block (`ARK_4IN1_F051\032.0\0e4`). A hex
+  third string in the `.file_name` block (`ARK_4IN1_F051\032.0\0e4`, ARK32 PR #134). A hex
   without the tag is never migrated for. Upstream AM32 pages are left alone:
   upstream never scaled its ramp, and its layout 4 (2.21) keeps every byte ARK32
   uses where it was.

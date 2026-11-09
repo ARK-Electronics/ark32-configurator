@@ -59,6 +59,26 @@ describe('parseArgs: releases and flash --release', () => {
     });
 });
 
+describe('parseArgs: flash --cells', () => {
+    it('is null unless given', () => {
+        expect(ok(['-p', 'x', 'flash', '--esc', 'all', '--hex', 'a.hex']).packCells).toBeNull();
+    });
+
+    it('parses the pack cell count', () => {
+        expect(ok(['-p', 'x', 'flash', '--esc', 'all', '--hex', 'a.hex', '--cells', '6']).packCells).toBe(6);
+    });
+
+    it('rejects a count that is not a pack', () => {
+        expect(why(['-p', 'x', 'flash', '--esc', 'all', '--hex', 'a.hex', '--cells', '0'])).toContain('at least 1');
+        expect(why(['-p', 'x', 'flash', '--esc', 'all', '--hex', 'a.hex', '--cells', '17'])).toContain('1 to 16');
+        expect(why(['-p', 'x', 'flash', '--esc', 'all', '--hex', 'a.hex', '--cells', '6S'])).toContain('whole number');
+    });
+
+    it('belongs to flash only', () => {
+        expect(why(['-p', 'x', 'write', '--esc', 'all', '--in', 'a.bin', '--cells', '6'])).toContain('write does not take --cells');
+    });
+});
+
 describe('parseArgs: help and version', () => {
     it('answers --help anywhere on the line, before validating anything else', () => {
         expect(parseArgs(['--help']).kind).toBe('help');

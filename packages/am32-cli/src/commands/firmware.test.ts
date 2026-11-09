@@ -83,7 +83,7 @@ describe('commandFlashRelease', () => {
 
         const outcome = await h.drive(() => commandFlashRelease(
             h.session, 'all', h.escCount, NIGHTLY, env,
-            { allowMcuMismatch: false, verify: true }
+            { allowMcuMismatch: false, verify: true, packCells: null }
         ));
 
         expect(outcome.exitCode).toBe(0);
@@ -102,7 +102,7 @@ describe('commandFlashRelease', () => {
 
         const outcome = await h.drive(() => commandFlashRelease(
             h.session, 'all', h.escCount, empty, env,
-            { allowMcuMismatch: false, verify: true }
+            { allowMcuMismatch: false, verify: true, packCells: null }
         ));
 
         expect(outcome.exitCode).toBe(1);
@@ -118,7 +118,7 @@ describe('commandFlashRelease', () => {
 
         const outcome = await h.drive(() => commandFlashRelease(
             h.session, 'all', h.escCount, NIGHTLY, env,
-            { allowMcuMismatch: false, verify: true }
+            { allowMcuMismatch: false, verify: true, packCells: null }
         ));
 
         expect(outcome.exitCode).toBe(1);

@@ -8,6 +8,7 @@
  * host widens *every* derivation at once rather than one literal at one site.
  */
 
+import { describeRampMigration, type RampMigrationReport } from 'am32-core/eeprom/ramp-migration';
 import { formatEscFirmwareVersion } from 'am32-core/firmware-version';
 import { parseHex } from 'am32-core/hex';
 import type { McuInfo } from 'am32-core/mcu';
@@ -19,6 +20,27 @@ import { exitCodeForTargets } from '../exit';
 import type { CommandOutcome } from '../report';
 import { CatalogError, downloadAsset, type FirmwareRelease, type ReleaseAsset } from './releases';
 import { forEachTarget, summariseOutcome, type OutcomeSummary } from './targets';
+
+/** The flash flags, as `run.ts` hands them over. */
+export interface FlashCommandOptions {
+    allowMcuMismatch: boolean
+    verify: boolean
+    /** `--cells`; only a flash that migrates the ramp reads it. */
+    packCells: number | null
+}
+
+function sessionFlashOptions (options: FlashCommandOptions) {
+    return {
+        allowMcuMismatch: options.allowMcuMismatch,
+        verify: options.verify,
+        ...(options.packCells === null ? {} : { packCells: options.packCells })
+    };
+}
+
+/** The extra line a flash that migrated the ramp prints under its ESC. */
+function migrationLine (migration: RampMigrationReport | null): string {
+    return migration ? `\n          ${describeRampMigration(migration)}` : '';
+}
 
 /**
  * `ark32 flash --esc 1|all --hex FILE`.
@@ -35,12 +57,9 @@ export async function commandFlash (
     selector: EscSelector,
     escCount: number,
     hex: string,
-    options: { allowMcuMismatch: boolean, verify: boolean }
+    options: FlashCommandOptions
 ): Promise<CommandOutcome> {
-    const outcomes = await forEachTarget(selector, escCount, target => session.flash(target, hex, {
-        allowMcuMismatch: options.allowMcuMismatch,
-        verify: options.verify
-    }));
+    const outcomes = await forEachTarget(selector, escCount, target => session.flash(target, hex, sessionFlashOptions(options)));
 
     const escs = outcomes.map((outcome): OutcomeSummary & {
         firmwareName: string | null
@@ -53,6 +72,8 @@ export async function commandFlash (
          * its bootloader.
          */
         bootByte: number | null
+        /** Set when the flash migrated an ARK layout-3 ramp for layout-4 firmware. */
+        rampMigration: RampMigrationReport | null
     } => {
         const info = outcome.value;
         if (!outcome.ok || !info) {
@@ -60,7 +81,8 @@ export async function commandFlash (
                 ...summariseOutcome(outcome),
                 firmwareName: null,
                 firmwareVersion: null,
-                bootByte: null
+                bootByte: null,
+                rampMigration: null
             };
         }
         const bootByte = info.settings.BOOT_BYTE;
@@ -71,13 +93,15 @@ export async function commandFlash (
                 info.settings,
                 info.meta.am32.firmwareVersion
             ),
-            bootByte: typeof bootByte === 'number' ? bootByte : null
+            bootByte: typeof bootByte === 'number' ? bootByte : null,
+            rampMigration: info.rampMigration ?? null
         };
     });
 
     const lines = escs.map(esc => (esc.ok
         ? `ESC #${esc.esc}  flashed ${esc.firmwareName ?? 'unnamed'} ` +
-          `v${esc.firmwareVersion ?? '?'}  boot byte 0x${(esc.bootByte ?? 0).toString(16).padStart(2, '0')}`
+          `v${esc.firmwareVersion ?? '?'}  boot byte 0x${(esc.bootByte ?? 0).toString(16).padStart(2, '0')}` +
+          migrationLine(esc.rampMigration)
         : `ESC #${esc.esc}  FAILED ${esc.error ?? ''}`));
 
     return { data: { escs }, lines, exitCode: exitCodeForTargets(outcomes) };
@@ -101,7 +125,7 @@ export async function commandFlashRelease (
     escCount: number,
     release: FirmwareRelease,
     env: CliEnv,
-    options: { allowMcuMismatch: boolean, verify: boolean }
+    options: FlashCommandOptions
 ): Promise<CommandOutcome> {
     const downloads = new Map<string, Promise<string>>();
     const download = (asset: ReleaseAsset): Promise<string> => {
@@ -137,7 +161,7 @@ export async function commandFlashRelease (
 
         const hex = await download(asset);
         chosen.set(target, asset);
-        return session.flash(target, hex, options);
+        return session.flash(target, hex, sessionFlashOptions(options));
     });
 
     const escs = outcomes.map((outcome): OutcomeSummary & {
@@ -145,6 +169,7 @@ export async function commandFlashRelease (
         firmwareVersion: string | null
         bootByte: number | null
         asset: string | null
+        rampMigration: RampMigrationReport | null
     } => {
         const info = outcome.value;
         const asset = chosen.get(outcome.target)?.name ?? null;
@@ -154,7 +179,8 @@ export async function commandFlashRelease (
                 firmwareName: null,
                 firmwareVersion: null,
                 bootByte: null,
-                asset
+                asset,
+                rampMigration: null
             };
         }
         const bootByte = info.settings.BOOT_BYTE;
@@ -166,13 +192,15 @@ export async function commandFlashRelease (
                 info.meta.am32.firmwareVersion
             ),
             bootByte: typeof bootByte === 'number' ? bootByte : null,
-            asset
+            asset,
+            rampMigration: info.rampMigration ?? null
         };
     });
 
     const lines = escs.map(esc => (esc.ok
         ? `ESC #${esc.esc}  flashed ${esc.asset ?? '?'} -> ${esc.firmwareName ?? 'unnamed'} ` +
-          `v${esc.firmwareVersion ?? '?'}  boot byte 0x${(esc.bootByte ?? 0).toString(16).padStart(2, '0')}`
+          `v${esc.firmwareVersion ?? '?'}  boot byte 0x${(esc.bootByte ?? 0).toString(16).padStart(2, '0')}` +
+          migrationLine(esc.rampMigration)
         : `ESC #${esc.esc}  FAILED ${esc.error ?? ''}`));
 
     return { data: { tag: release.tag, escs }, lines, exitCode: exitCodeForTargets(outcomes) };

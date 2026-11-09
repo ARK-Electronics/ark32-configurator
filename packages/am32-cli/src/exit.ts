@@ -88,7 +88,7 @@ export function exitCodeForError (error: unknown): ExitCode {
     if (CONNECT_REASONS.has(session.reason)) {
         return EXIT_CONNECT;
     }
-    if (session.reason === 'image') {
+    if (session.reason === 'image' || session.reason === 'migration') {
         return EXIT_USAGE;
     }
     return EXIT_PARTIAL;
@@ -117,7 +117,7 @@ export function exitCodeForTargets (outcomes: readonly TargetOutcome[]): ExitCod
         return EXIT_OK;
     }
 
-    if (failures.length === outcomes.length && failures.every(f => f.reason === 'image')) {
+    if (failures.length === outcomes.length && failures.every(f => f.reason === 'image' || f.reason === 'migration')) {
         return EXIT_USAGE;
     }
 

@@ -26,6 +26,22 @@ export type {
 export { decode, encode, decodeSettings, encodeSettings, patchSettings } from './eeprom/codec';
 
 export {
+    EXACT_RAMP_LAYOUT,
+    FULL_CHARGE_CELL_VOLTS,
+    MAX_PACK_CELLS,
+    MIN_PACK_CELLS,
+    SCALED_RAMP_FIRMWARE_MAJORS,
+    SCALED_RAMP_LAYOUT,
+    applyRampMigration,
+    describeRampMigration,
+    formatRampRaw,
+    migrateScaledRamp,
+    needsRampMigration,
+    scaledRampRates
+} from './eeprom/ramp-migration';
+export type { RampMigrationReport, RampRates } from './eeprom/ramp-migration';
+
+export {
     MSP_COMMANDS,
     MSP_JUMBO_FRAME_SIZE_LIMIT,
     MSP_V1_MAX_COMMAND,
@@ -131,9 +147,11 @@ export {
 export type { NamedAsset } from './releases';
 
 export {
+    EEPROM_LAYOUT_TAG_PATTERN,
     FIRMWARE_NAME_PATTERN,
     FIRMWARE_VERSION_PATTERN,
     formatEscFirmwareVersion,
+    parseEepromLayoutTag,
     parseFirmwareNameRegion
 } from './firmware-version';
 export type { ParsedFirmwareNameRegion } from './firmware-version';

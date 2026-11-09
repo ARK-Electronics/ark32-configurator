@@ -64,8 +64,17 @@ import { Link, type LinkOptions } from './link/link';
 import { DEFAULT_TIMEOUT_POLICY, TimeoutPolicy } from './link/timeout-policy';
 import {
     FIRMWARE_NAME_PATTERN,
+    parseEepromLayoutTag,
     parseFirmwareNameRegion
 } from './firmware-version';
+import {
+    MAX_PACK_CELLS,
+    MIN_PACK_CELLS,
+    applyRampMigration,
+    describeRampMigration,
+    needsRampMigration,
+    type RampMigrationReport
+} from './eeprom/ramp-migration';
 import { Mcu, createMcuInfo, type McuInfo } from './mcu';
 import { decodeBytesZ } from './text';
 import type { Transport } from './transport';
@@ -195,6 +204,19 @@ export interface FlashOptions {
      * `writeFirmware`.
      */
     verify?: boolean;
+    /**
+     * Series cell count of the pack the ESC flies on. Needed only when the hex
+     * runs EEPROM layout 4 or later and the ESC holds an ARK layout-3 page: the
+     * stored ramp is then migrated to the rate layout 3 actually flew on this
+     * pack (`eeprom/ramp-migration.ts`). Without it such a flash is refused
+     * with `SessionError('migration')` before anything is written; for any
+     * other flash it is ignored.
+     *
+     * The app pre-fills it from the FC's `MSP_BATTERY_STATE` when the FC
+     * reports one (Betaflight). ArduPilot answers that request with a fixed
+     * 4S, which `MspSession` discards, so there the pilot has to say.
+     */
+    packCells?: number;
 }
 
 export interface Am32SessionOptions {
@@ -1140,10 +1162,21 @@ export class Am32Session {
             const verify = options.verify !== false;
             const eepromOffset = mcu.getEepromOffset();
             const settingsImage = await this.fourWay.readAddress(eepromOffset, EEPROM_SIZE);
+            const migration = this.planRampMigration(target, image, eepromOffset, settingsImage, options.packCells);
 
             await this.writeBootByte(target, eepromOffset, settingsImage, 0x00, verify);
             await this.writeFirmware(target, image, mcu, verify);
-            await this.writeBootByte(target, eepromOffset, settingsImage, 0x01, verify);
+            // The closing boot-byte write carries the migrated ramp: the page is
+            // rewritten here anyway, and until this write lands the ESC still
+            // holds its original layout-3 page, so a flash that dies part way is
+            // retried from the original value, never from a migrated one.
+            await this.writeBootByte(target, eepromOffset, migration?.page ?? settingsImage, 0x01, verify);
+            if (migration) {
+                this.emitter.emit('log', {
+                    level: 'info',
+                    message: `ESC #${target + 1}: ${describeRampMigration(migration.report)}`
+                });
+            }
 
             this.emitter.emit('progress', { phase: 'reset', current: 0, total: 1, target });
             await this.fourWay.reset(target);
@@ -1152,11 +1185,53 @@ export class Am32Session {
 
             this.emitter.emit('progress', { phase: 'read', current: 0, total: 1, target });
             const info = await this.readEscUnlabelled(target);
+            if (migration) {
+                info.rampMigration = migration.report;
+            }
             this.emitter.emit('progress', { phase: 'read', current: 1, total: 1, target });
             this.emitter.emit('esc', { target, status: 'ok', info });
 
             return info;
         });
+    }
+
+    /**
+     * Decide, before anything is written, whether this flash migrates the ramp.
+     *
+     * The image's layout comes from its `.file_name` tag (`e4`); the page is the
+     * one just read off the ESC. A migration that needs a cell count nobody gave
+     * is refused here, while the ESC is untouched, rather than flashing firmware
+     * that would run the stored ramp up to twice as fast as before.
+     */
+    private planRampMigration (
+        target: number,
+        image: Uint8Array,
+        eepromOffset: number,
+        settingsImage: Uint8Array,
+        packCells: number | undefined
+    ): { page: Uint8Array, report: RampMigrationReport } | null {
+        const nameAt = eepromOffset - FIRMWARE_NAME_BYTES;
+        const imageLayout = parseEepromLayoutTag(image.subarray(nameAt, nameAt + FIRMWARE_NAME_BYTES));
+        if (!needsRampMigration(settingsImage, imageLayout)) {
+            return null;
+        }
+        if (packCells === undefined) {
+            throw new SessionError(
+                'migration',
+                `this firmware runs the ramp setting exactly (EEPROM layout ${imageLayout}) and the ESC's ` +
+                'ramp was stored for the voltage-scaled ramp of earlier ARK firmware. Migrating it needs ' +
+                'the pack\'s cell count; nothing was written',
+                { target }
+            );
+        }
+        if (!Number.isInteger(packCells) || packCells < MIN_PACK_CELLS || packCells > MAX_PACK_CELLS) {
+            throw new SessionError(
+                'migration',
+                `pack cell count must be a whole number from ${MIN_PACK_CELLS} to ${MAX_PACK_CELLS}, got ${packCells}`,
+                { target }
+            );
+        }
+        return applyRampMigration(settingsImage, packCells);
     }
 
     /**

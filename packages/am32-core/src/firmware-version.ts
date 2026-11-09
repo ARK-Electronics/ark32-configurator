@@ -79,6 +79,47 @@ export function parseFirmwareNameRegion (bytes: ArrayLike<number>): ParsedFirmwa
 }
 
 /**
+ * The EEPROM layout a firmware image declares in its `.file_name` region.
+ *
+ * ARK32 builds from PR #128 on append the layout as a further C-string after
+ * the version, `e` and the number (`ARK_4IN1_F051\032.0\0e4\0`), because the
+ * version does not say which layout a build uses: layout 4 shipped under 32.0,
+ * and nightlies carry the release number. Null when the region has no tag,
+ * which is every image built before it -- all layout 3 or older. Only strings
+ * after the name count, so a board name cannot be mistaken for a tag.
+ */
+export const EEPROM_LAYOUT_TAG_PATTERN = /^e(\d{1,3})$/;
+
+export function parseEepromLayoutTag (bytes: ArrayLike<number>): number | null {
+    const strings: string[] = [];
+    let current = '';
+    for (let i = 0; i < bytes.length; i += 1) {
+        const b = bytes[i] as number;
+        if (b === 0x00 || b === 0xFF) {
+            if (current) {
+                strings.push(current);
+                current = '';
+            }
+            if (b === 0xFF) {
+                break;
+            }
+            continue;
+        }
+        current += String.fromCharCode(b);
+    }
+    if (current) {
+        strings.push(current);
+    }
+    for (const value of strings.slice(1)) {
+        const match = EEPROM_LAYOUT_TAG_PATTERN.exec(value);
+        if (match) {
+            return Number(match[1]);
+        }
+    }
+    return null;
+}
+
+/**
  * Format the version the UI / CLI should show for a connected ESC.
  *
  * Prefers the embedded ship version from the name region when the firmware

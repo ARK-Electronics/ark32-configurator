@@ -45,6 +45,14 @@ export type SessionErrorReason =
      * wire -- it is a bad argument, and block 7 maps it to a different exit code.
      */
     | 'image'
+    /**
+     * Flashing this image over this ESC's settings needs its ramp migrated
+     * (ARK32 layout 3 to 4, `eeprom/ramp-migration.ts`), and the caller did not
+     * give the pack's cell count the migration depends on. Raised before
+     * anything is written, so like `image` it is a missing argument, not a
+     * failure on the wire.
+     */
+    | 'migration'
     /** The call needs a `connect()` that has not happened. */
     | 'not-connected';
 

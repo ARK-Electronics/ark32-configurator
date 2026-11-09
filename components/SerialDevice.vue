@@ -181,6 +181,18 @@
                 </div>
               </template>
             </UTabs>
+            <UFormGroup
+              v-if="flashNeedsPackCells"
+              label="Battery cells"
+              help="These ESCs hold a ramp setting from earlier ARK firmware, which scaled it by pack voltage. Firmware with the exact ramp converts it to the rate it actually flew on this pack."
+            >
+              <USelect
+                v-model="packCells"
+                :options="packCellOptions"
+                placeholder="Pack size this ESC flies on"
+                :disabled="isFlashingActive"
+              />
+            </UFormGroup>
           </div>
           <div v-else class="text-green-500 text-center">
             Flashing local '{{ fileInput ?? 'UNKNOWN' }}'
@@ -213,7 +225,8 @@
                     escStore.isBusy || downloading ||
                       (savingOrApplyingSelectedEscs.length === 0) ||
                       (currentTab === 0 && (!selectedAsset || selectedAsset === 'NOT FOUND')) ||
-                      (currentTab > 0 && !fileInput)
+                      (currentTab > 0 && !fileInput) ||
+                      (flashNeedsPackCells && packCells === undefined)
                   "
                   @click="startModalFlash"
                 />
@@ -359,6 +372,13 @@
 </template>
 
 <script setup lang="ts">
+import {
+    MAX_PACK_CELLS,
+    MIN_PACK_CELLS,
+    SCALED_RAMP_FIRMWARE_MAJORS,
+    SCALED_RAMP_LAYOUT,
+    describeRampMigration
+} from 'am32-core/eeprom/ramp-migration';
 import { findFirmwareAsset } from 'am32-core/releases';
 import db from '~/src/db';
 import { NO_DEVICE } from '~/stores/serial';
@@ -394,6 +414,32 @@ const ignoreMcuLayout = ref(false);
 const includePrerelease = ref(false);
 const savingOrApplyingSelectedEscs = ref<number[]>([]);
 const isFlashingActive = computed(() => escStore.activeTarget > -1);
+
+/**
+ * Pack size for the ARK layout-3 -> 4 ramp migration
+ * (`am32-core/eeprom/ramp-migration`).
+ *
+ * Asked whenever a selected ESC holds a page earlier ARK firmware wrote, because
+ * the hex has not been downloaded yet when the dialog opens. The session migrates
+ * only if the hex declares layout 4, and ignores the value for any other flash.
+ * Pre-filled from the FC's battery report when it gives one (Betaflight).
+ */
+const packCells = ref<number | undefined>(undefined);
+const packCellOptions = Array.from(
+    { length: MAX_PACK_CELLS - MIN_PACK_CELLS + 1 },
+    (_, i) => ({ label: `${i + MIN_PACK_CELLS}S`, value: i + MIN_PACK_CELLS })
+);
+const flashNeedsPackCells = computed(() => savingOrApplyingSelectedEscs.value.some((n) => {
+    const settings = escStore.escData[n - 1]?.data?.settings;
+    return settings?.LAYOUT_REVISION === SCALED_RAMP_LAYOUT &&
+        SCALED_RAMP_FIRMWARE_MAJORS.includes(settings?.MAIN_REVISION as number);
+}));
+watch(flashModalOpen, (open) => {
+    const cells = serialStore.fc?.battery?.cells ?? 0;
+    if (open && packCells.value === undefined && cells >= MIN_PACK_CELLS && cells <= MAX_PACK_CELLS) {
+        packCells.value = cells;
+    }
+});
 /**
  * True while a release hex is being fetched.
  *
@@ -682,7 +728,8 @@ const startModalFlash = async () => {
 const startFlash = async (hexString: string) => {
     const targets = savingOrApplyingSelectedEscs.value.map(n => n - 1);
     const flashed = await escSession.flashTargets(hexString, targets, {
-        allowMcuMismatch: ignoreMcuLayout.value
+        allowMcuMismatch: ignoreMcuLayout.value,
+        ...(packCells.value === undefined ? {} : { packCells: packCells.value })
     });
 
     if (!flashed) {
@@ -695,6 +742,19 @@ const startFlash = async (hexString: string) => {
         color: 'green',
         description: `Flashed ${targets.length} ESC(s)`
     });
+
+    // Read before connectToEsc() replaces each record with a plain re-read.
+    const migration = targets
+        .map(target => escStore.escData[target]?.data?.rampMigration)
+        .find(report => report !== undefined);
+    if (migration) {
+        toast.add({
+            title: 'Ramp setting converted',
+            color: 'blue',
+            timeout: 0,
+            description: describeRampMigration(migration)
+        });
+    }
 
     // The session already re-read each ESC it flashed; this re-runs the fresh-EEPROM
     // and 2.19 recovery policies over the whole board, which is what the old flash

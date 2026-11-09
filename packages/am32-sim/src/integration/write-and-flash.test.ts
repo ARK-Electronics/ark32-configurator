@@ -1083,7 +1083,7 @@ describe('fault knob: esc[n].silentWriteFailure -- an accepted write that did no
 // ---- ARK32 layout 3 -> 4 ramp migration ---------------------------------------
 
 describe('Am32Session.flash: ramp migration for layout-4 firmware', () => {
-    /** The name block an ARK32 build from PR #128 on writes: name, version, layout. */
+    /** The name block an ARK32 build from PR #134 on writes: name, version, layout. */
     const LAYOUT4 = 'ARK_4IN1_F051\u000032.0\u0000e4';
 
     const setRamp = (esc: SimEsc, raw: number) => {

@@ -81,7 +81,7 @@ export function parseFirmwareNameRegion (bytes: ArrayLike<number>): ParsedFirmwa
 /**
  * The EEPROM layout a firmware image declares in its `.file_name` region.
  *
- * ARK32 builds from PR #128 on append the layout as a further C-string after
+ * ARK32 builds from PR #134 on append the layout as a further C-string after
  * the version, `e` and the number (`ARK_4IN1_F051\032.0\0e4\0`), because the
  * version does not say which layout a build uses: layout 4 shipped under 32.0,
  * and nightlies carry the release number. Null when the region has no tag,

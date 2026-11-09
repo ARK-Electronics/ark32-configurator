@@ -54,3 +54,37 @@ node packages/am32-cli/dist/ark32.mjs --sim set --esc 1 MOTOR_KV=25
 Tests cover runtime fetched aliases, mixed ESC versions, byte preservation,
 future little-endian scalars, the factory image, a real HTTP release fixture and
 filesystem cache, offline fallback, and unsupported schema language versions.
+
+## Ramp migration: ARK32 layout 3 to 4
+
+ARK32 layout 4 (ARK32 PR #128) runs `MAX_RAMP` as an exact duty rate. Every ARK
+release before it (3.0.1-ark to 32.0, layout 3) scaled the stored ramp by
+14.8 V / pack voltage and truncated it per tick. The same number therefore flew
+slower above 14.8 V: the factory 2.0 %/ms ran at 1.0 on 4S-6S. The firmware
+never rewrites the byte, and its first boot stamps layout 4 over the page, so
+`Am32Session.flash` migrates it while it still holds the pre-flash page
+(`packages/am32-core/src/eeprom/ramp-migration.ts`).
+
+- **When.** The page is layout 3 with `MAIN_REVISION` 3 or 32 (ARK firmware),
+  and the hex declares layout 4 or later. ARK32 images carry the layout as a
+  third string in the `.file_name` block (`ARK_4IN1_F051\032.0\0e4`). A hex
+  without the tag is never migrated for. Upstream AM32 pages are left alone:
+  upstream never scaled its ramp, and its layout 4 (2.21) keeps every byte ARK32
+  uses where it was.
+- **To what.** The rate layout 3 actually ran on this pack, evaluated at full
+  charge (4.2 V per cell, its slowest point), taking the slowest of the startup,
+  low-rpm and high-rpm regimes. Layout 4 has one rate for all three, so this is
+  the value that never ramps faster than before in any regime. Above 14.8 V any
+  stored ramp of 1.0 or more becomes 1.0.
+- **Write.** The migrated ramp and layout byte 4 go out in the closing boot-byte
+  write of the flash, so a flash that dies part way is retried from the original
+  value. A second flash reads a layout-4 page and does not migrate again.
+- **Cell count.** The flash needs `packCells` (CLI `--cells N`). Without it a
+  migrating flash is refused with `SessionError('migration')` (CLI exit 3)
+  before anything is written. The app asks in the flash dialog when a selected
+  ESC holds an ARK layout-3 page, pre-filled from `MSP_BATTERY_STATE` on
+  Betaflight. ArduPilot reports a fixed 4S, which the session discards.
+
+Pages written by tools that do not migrate (the upstream AM32 configurator,
+DroneCAN parameter writes) arrive at layout 4 with the stored value unchanged,
+and then run it exactly.

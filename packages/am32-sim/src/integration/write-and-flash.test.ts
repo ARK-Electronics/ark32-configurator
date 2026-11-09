@@ -1079,3 +1079,94 @@ describe('fault knob: esc[n].silentWriteFailure -- an accepted write that did no
             .rejects.toMatchObject({ name: 'SessionError', reason: 'esc-verify' });
     });
 });
+
+// ---- ARK32 layout 3 -> 4 ramp migration ---------------------------------------
+
+describe('Am32Session.flash: ramp migration for layout-4 firmware', () => {
+    /** The name block an ARK32 build from PR #128 on writes: name, version, layout. */
+    const LAYOUT4 = 'ARK_4IN1_F051\u000032.0\u0000e4';
+
+    const setRamp = (esc: SimEsc, raw: number) => {
+        esc.poke(esc.eepromOffset + EepromLayout.MAX_RAMP.offset, [raw]);
+    };
+
+    it('converts an ARK layout-3 ramp to what it flew, and marks the page layout 4', async () => {
+        const h = await inPassthrough();
+        const esc = firstEsc(h);
+        setRamp(esc, 20);
+        const before = esc.eeprom;
+
+        const info = await drive(h.clock, h.session.flash(0, firmwareHex({ name: LAYOUT4 }), { packCells: 6 }));
+
+        const after = esc.eeprom;
+        expect(after[EepromLayout.MAX_RAMP.offset]).toBe(10);
+        expect(after[EepromLayout.LAYOUT_REVISION.offset]).toBe(4);
+        expect(after[EepromLayout.BOOT_BYTE.offset]).toBe(0x01);
+        // Only the ramp and the layout byte moved; the CAN block and every other
+        // setting came through the bracket untouched.
+        const changed = Array.from(after.keys()).filter(i => after[i] !== before[i]);
+        expect(changed).toEqual([EepromLayout.LAYOUT_REVISION.offset, EepromLayout.MAX_RAMP.offset]);
+
+        expect(info.rampMigration).toMatchObject({ from: 20, to: 10, cells: 6 });
+        expect(info.settings.MAX_RAMP).toBe(10);
+        expect(h.logs.some(line => line.includes('ESC #1: ramp 2.0 -> 1.0 %/ms'))).toBe(true);
+    });
+
+    it('refuses before writing anything when it has no cell count', async () => {
+        const h = await inPassthrough();
+        const esc = firstEsc(h);
+        setRamp(esc, 20);
+        const writesBefore = esc.counts.write;
+        const before = esc.eeprom;
+
+        await expect(drive(h.clock, h.session.flash(0, firmwareHex({ name: LAYOUT4 }))))
+            .rejects.toMatchObject({ name: 'SessionError', reason: 'migration', target: 0 });
+
+        expect(esc.counts.write).toBe(writesBefore);
+        expect(Array.from(esc.eeprom)).toEqual(Array.from(before));
+    });
+
+    it('rejects a cell count that is not a pack', async () => {
+        const h = await inPassthrough();
+        await expect(drive(h.clock, h.session.flash(0, firmwareHex({ name: LAYOUT4 }), { packCells: 0 })))
+            .rejects.toMatchObject({ name: 'SessionError', reason: 'migration' });
+    });
+
+    it('migrates once: a second flash before the ESC boots leaves the converted value', async () => {
+        const h = await inPassthrough();
+        const esc = firstEsc(h);
+        // 0.5 %/ms on 6S flew 0.2; converting 0.2 again would give 0.1.
+        setRamp(esc, 5);
+
+        await drive(h.clock, h.session.flash(0, firmwareHex({ name: LAYOUT4 }), { packCells: 6 }));
+        expect(esc.eeprom[EepromLayout.MAX_RAMP.offset]).toBe(2);
+
+        const again = await drive(h.clock, h.session.flash(0, firmwareHex({ name: LAYOUT4 })));
+        expect(esc.eeprom[EepromLayout.MAX_RAMP.offset]).toBe(2);
+        expect(again.rampMigration).toBeUndefined();
+    });
+
+    it('leaves the ramp alone for firmware that does not declare layout 4', async () => {
+        const h = await inPassthrough();
+        const esc = firstEsc(h);
+        setRamp(esc, 20);
+
+        const info = await drive(h.clock, h.session.flash(0, firmwareHex({ name: 'ARK_4IN1_F051\u000032.0' }), { packCells: 6 }));
+
+        expect(esc.eeprom[EepromLayout.MAX_RAMP.offset]).toBe(20);
+        expect(esc.eeprom[EepromLayout.LAYOUT_REVISION.offset]).toBe(3);
+        expect(info.rampMigration).toBeUndefined();
+    });
+
+    it('leaves an upstream AM32 page alone: upstream never scaled its ramp', async () => {
+        const h = await inPassthrough({ esc: { firmwareVersion: [2, 20] } });
+        const esc = firstEsc(h);
+        setRamp(esc, 20);
+
+        const info = await drive(h.clock, h.session.flash(0, firmwareHex({ name: LAYOUT4 })));
+
+        expect(esc.eeprom[EepromLayout.MAX_RAMP.offset]).toBe(20);
+        expect(esc.eeprom[EepromLayout.LAYOUT_REVISION.offset]).toBe(3);
+        expect(info.rampMigration).toBeUndefined();
+    });
+});

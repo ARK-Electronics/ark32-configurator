@@ -49,6 +49,10 @@ describe('exitCodeForError', () => {
         expect(exitCodeForError(new SessionError('image', 'not Intel HEX'))).toBe(EXIT_USAGE);
     });
 
+    it('maps migration to 3: the flash needs --cells, and nothing was written', () => {
+        expect(exitCodeForError(new SessionError('migration', 'needs the cell count'))).toBe(EXIT_USAGE);
+    });
+
     it('unwraps the SessionError a LinkError grew out of', () => {
         // Link.request wraps whatever `validate` throws, so the reason is one or two
         // levels down. Flattening it would report every 4-way failure the same way.
@@ -87,6 +91,13 @@ describe('exitCodeForTargets', () => {
     it('is 3 only when every channel rejected the argument itself', () => {
         expect(exitCodeForTargets([
             { ok: false, reason: 'image' },
+            { ok: false, reason: 'image' }
+        ])).toBe(EXIT_USAGE);
+    });
+
+    it('is 3 when every channel needs the --cells it was not given', () => {
+        expect(exitCodeForTargets([
+            { ok: false, reason: 'migration' },
             { ok: false, reason: 'image' }
         ])).toBe(EXIT_USAGE);
     });

@@ -94,6 +94,12 @@ export interface ParsedArgs {
     /** False when `--no-verify` was given. Every write path reads this. */
     verify: boolean
     allowMcuMismatch: boolean
+    /**
+     * `--cells N`, the pack's series cell count. Only a flash that migrates an
+     * ARK layout-3 ramp for layout-4 firmware needs it; that flash refuses to
+     * start without it. Null when not given.
+     */
+    packCells: number | null
     /** Whatever positional arguments followed the command. */
     operands: string[]
 }
@@ -132,7 +138,8 @@ const VALUED_FLAGS = new Set([
     '-o', '--out',
     '-i', '--in',
     '--hex',
-    '--release'
+    '--release',
+    '--cells'
 ]);
 
 /** Which commands accept which command-scoped flags. Anything else is exit 3. */
@@ -146,7 +153,7 @@ const COMMAND_FLAGS: Record<CommandName, readonly string[]> = {
     set: ['--esc', '--no-verify'],
     defaults: ['--esc', '--no-verify'],
     releases: [],
-    flash: ['--esc', '--hex', '--release', '--no-verify', '--allow-mcu-mismatch'],
+    flash: ['--esc', '--hex', '--release', '--no-verify', '--allow-mcu-mismatch', '--cells'],
     reset: ['--esc']
 };
 
@@ -241,6 +248,9 @@ Command flags
                          the asset matching its own firmware name
       --no-verify        skip read-back verification (write, set, defaults, flash)
       --allow-mcu-mismatch  flash a hex whose firmware name is not this board's
+      --cells N          the pack's cell count (flash). Needed when the hex runs the
+                         exact ramp (EEPROM layout 4) and the ESC holds a ramp from
+                         earlier ARK firmware, which scaled it by pack voltage
 
 Releases come from github.com/ARK-Electronics/ARK32; override with
 GITHUB_FIRMWARE_OWNER / GITHUB_FIRMWARE_REPO, and set GITHUB_TOKEN (or GH_TOKEN)
@@ -437,6 +447,7 @@ export function parseArgs (argv: readonly string[]): ParseResult {
     let release: string | null = null;
     let verify = true;
     let allowMcuMismatch = false;
+    let packCells: number | null = null;
     const operands: string[] = [];
     const flagsUsed = new Set<string>();
 
@@ -529,6 +540,18 @@ export function parseArgs (argv: readonly string[]): ParseResult {
                 release = value;
                 flagsUsed.add('--release');
                 break;
+            case '--cells': {
+                const parsed = parseInteger('--cells', value, 1);
+                if (typeof parsed !== 'number') {
+                    return parsed;
+                }
+                if (parsed > 16) {
+                    return fail(`--cells takes 1 to 16, got ${parsed}`);
+                }
+                packCells = parsed;
+                flagsUsed.add('--cells');
+                break;
+            }
             }
             continue;
         }
@@ -652,6 +675,7 @@ export function parseArgs (argv: readonly string[]): ParseResult {
         release,
         verify,
         allowMcuMismatch,
+        packCells,
         operands
     };
 }

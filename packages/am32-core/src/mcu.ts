@@ -8,6 +8,7 @@
 
 import type { ResolvedSchema } from './eeprom/schema';
 import type { McuSettings } from './eeprom/layout';
+import type { RampMigrationReport } from './eeprom/ramp-migration';
 
 export interface McuVariant {
     name: string;
@@ -50,6 +51,11 @@ export interface McuInfo {
     settings: McuSettings;
     settingsBuffer: Uint8Array;
     isSelected: boolean;
+    /**
+     * Set only on the record `Am32Session.flash` returns, when that flash
+     * migrated an ARK layout-3 ramp for layout-4 firmware.
+     */
+    rampMigration?: RampMigrationReport;
 }
 
 export interface EscData {

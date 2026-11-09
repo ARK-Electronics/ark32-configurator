@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
     formatEscFirmwareVersion,
+    parseEepromLayoutTag,
     parseFirmwareNameRegion
 } from './firmware-version';
 
@@ -84,5 +85,37 @@ describe('formatEscFirmwareVersion', () => {
     it('returns ? when neither source is usable', () => {
         expect(formatEscFirmwareVersion({})).toBe('?');
         expect(formatEscFirmwareVersion({ MAIN_REVISION: 3, SUB_REVISION: 0 }, 'bogus')).toBe('3.0');
+    });
+});
+
+describe('parseEepromLayoutTag', () => {
+    it('reads the layout an ARK32 image declares after its version', () => {
+        expect(parseEepromLayoutTag(region(['ARK_4IN1_F051', '32.0', 'e4']))).toBe(4);
+        expect(parseEepromLayoutTag(region(['ARK_4IN1_F051', '32.0-nightly', 'e4']))).toBe(4);
+    });
+
+    it('is null for an image that does not declare one', () => {
+        expect(parseEepromLayoutTag(region(['ARK_4IN1_F051', '32.0']))).toBeNull();
+        expect(parseEepromLayoutTag(region(['ARK_4IN1_F051']))).toBeNull();
+        expect(parseEepromLayoutTag(new Uint8Array(32).fill(0xFF))).toBeNull();
+        expect(parseEepromLayoutTag(new Uint8Array(0))).toBeNull();
+    });
+
+    it('does not read the board name as a tag', () => {
+        expect(parseEepromLayoutTag(region(['e4']))).toBeNull();
+    });
+
+    it('leaves the name and version the other parser sees unchanged', () => {
+        expect(parseFirmwareNameRegion(region(['ARK_4IN1_F051', '32.0', 'e4']))).toEqual({
+            fileName: 'ARK_4IN1_F051',
+            firmwareVersion: '32.0'
+        });
+    });
+
+    it('matches the bytes the ARK32 build writes', () => {
+        // obj/ARK32_ARK_4IN1_F051_32.0.bin, the 32 bytes below the EEPROM page.
+        const bytes = new Uint8Array(32);
+        bytes.set(Array.from('ARK_4IN1_F051\x0032.0\x00e4', c => c.charCodeAt(0)));
+        expect(parseEepromLayoutTag(bytes)).toBe(4);
     });
 });

@@ -204,12 +204,12 @@ async function dispatch (args: ParsedArgs, env: CliEnv, reporter: Reporter): Pro
             if (release !== null) {
                 return reporter.finish('flash', await commandFlashRelease(
                     rig.session, selector, rig.escCount, release, env,
-                    { allowMcuMismatch: args.allowMcuMismatch, verify: args.verify }
+                    { allowMcuMismatch: args.allowMcuMismatch, verify: args.verify, packCells: args.packCells }
                 ));
             }
             return reporter.finish('flash', await commandFlash(
                 rig.session, selector, rig.escCount, hex as string,
-                { allowMcuMismatch: args.allowMcuMismatch, verify: args.verify }
+                { allowMcuMismatch: args.allowMcuMismatch, verify: args.verify, packCells: args.packCells }
             ));
         case 'reset':
             return reporter.finish(

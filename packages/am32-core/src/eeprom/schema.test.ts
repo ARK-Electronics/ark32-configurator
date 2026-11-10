@@ -120,7 +120,7 @@ describe('living EEPROM schema', () => {
     });
 
     it('keeps the golden erase image and produces canonical portable reset values', () => {
-        const golden = [1, 3, 1, 1, 35, 160, 4, 0, 10, 100, 0, 50, 2, 48, 53, 49, 32, 0, 0, 0, 1, 1, 1, 26, 24, 100, 55, 14, 0, 0, 5, 0, 128, 128, 128, 50, 0, 50, 0, 0, 15, 10, 10, 141, 102, 6, 1, 0];
+        const golden = [1, 4, 1, 1, 35, 160, 4, 0, 10, 100, 0, 50, 2, 0, 0, 49, 32, 0, 0, 0, 1, 1, 1, 26, 24, 100, 55, 14, 0, 0, 5, 0, 128, 128, 128, 50, 0, 50, 0, 0, 15, 10, 10, 141, 102, 6, 1, 0];
         expect(Array.from(createDefaultImage(BUNDLED_SCHEMA, context))).toEqual(golden);
         const patch = defaultSettings(BUNDLED_SCHEMA, context);
         expect(patch.TEMPERATURE_LIMIT).toBe(255);

@@ -16,7 +16,9 @@ import { decodeSettings, encodeSettings, patchSettings } from './codec';
  */
 
 /** Byte ranges the firmware owns and the configurator must never disturb. */
-const RESERVED_EEPROM_3 = { start: 13, end: 17 }; // char reserved_eeprom_3[4], eeprom.h:25
+// 13 brake_on_zero_throttle and 14 demag_comp (upstream AM32 layout 4, unused by
+// ARK32), 15-16 reserved: all type 'reserved' in schema/eeprom.json.
+const RESERVED_EEPROM_3 = { start: 13, end: 17 };
 const CAN_BLOCK = { start: 176, end: 184 }; // the eight live can.* fields
 const CAN_RESERVED = { start: 184, end: 192 }; // can.reserved[8]
 
